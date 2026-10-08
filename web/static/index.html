@@ -128,6 +128,19 @@
       <div class="msg" id="rx-msg"></div>
     </div>
     <div class="panel">
+      <h2>Storage and retention</h2>
+      <p>Old recordings are deleted automatically (checked every 10 minutes, no restart needed). Deleting is permanent.
+         Audio is the large part; transcripts are tiny, and keeping them lets you search old calls after their audio is gone.
+         Set 0 to keep forever.</p>
+      <div class="grid">
+        <label>Delete audio older than (days)<input id="e-RETENTION_AUDIO_DAYS" inputmode="numeric"></label>
+        <label>Delete whole call and transcript older than (days)<input id="e-RETENTION_TEXT_DAYS" inputmode="numeric"></label>
+      </div>
+      <div class="meta" id="storage-stats" style="margin-top:8px"></div>
+      <div class="bar" style="margin-top:10px"><button class="btn primary" id="ret-save">Save retention settings</button></div>
+      <div class="msg" id="ret-msg"></div>
+    </div>
+    <div class="panel">
       <h2>Transcription</h2>
       <p>Bigger models are more accurate but slower and use more memory. The model downloads the first time it is used.</p>
       <div class="grid">
@@ -177,10 +190,12 @@ function el(c, fresh) {
   div.querySelector('.tag').textContent = c.tag || ('TG ' + c.talkgroup);
   div.querySelector('.meta').textContent = '· ' + (c.description || '');
   div.querySelector('.time').textContent = fmtTime(c.start_ms);
-  div.querySelector('.sub').textContent = mhz + unit + enc;
+  div.querySelector('.sub').textContent = mhz + unit + enc + (c.audio_deleted ? ' · audio deleted' : '');
   div.children[4].textContent = ((c.length_ms || 0) / 1000).toFixed(1) + ' s';
   setTx(div, c);
-  div.querySelector('.play').onclick = () => play(c);
+  const pb = div.querySelector('.play');
+  if (c.audio_deleted) { pb.disabled = true; pb.style.opacity = '.35'; pb.title = 'Audio deleted (retention)'; }
+  else pb.onclick = () => play(c);
   return div;
 }
 function play(c) {
@@ -291,6 +306,9 @@ async function loadSettings() {
   const body = $('#ch-body'); body.innerHTML = '';
   d.channels.forEach(r => body.append(chRow(r)));
   for (const [k, v] of Object.entries(d.env)) { const n = $('#e-' + k); if (n) n.value = v; }
+  const st = d.storage, gb = (st.audio_bytes / 1e9).toFixed(2);
+  $('#storage-stats').textContent = `${st.calls} calls in the archive, ${st.audio_files} audio files using ${gb} GB` +
+    (st.oldest_ms ? `; oldest call ${new Date(st.oldest_ms).toLocaleString()}` : '');
   setStatus('#st-recorder', d.status.recorder); setStatus('#st-transcribe', d.status.transcribe);
 }
 $('#ch-add').onclick = () => $('#ch-body').append(chRow({enabled: 'true', mode: 'analog'}));
@@ -308,6 +326,14 @@ async function saveEnv(keys, out, what) {
   } catch (e) { msg(out, 'Save failed: ' + e.message, false); }
 }
 $('#rx-save').onclick = () => saveEnv(['SDR_GAIN', 'ANALOG_SQUELCH', 'P25_SQUELCH', 'P25_MODULATION', 'MIN_DURATION'], '#rx-msg', ['recorder']);
+async function saveRetention() {
+  const values = {RETENTION_AUDIO_DAYS: $('#e-RETENTION_AUDIO_DAYS').value, RETENTION_TEXT_DAYS: $('#e-RETENTION_TEXT_DAYS').value};
+  try {
+    const r = await post('/api/settings/env', {values});
+    msg('#ret-msg', r.ok ? 'Saved. Takes effect within 10 minutes; no restart needed.' : r.error, r.ok);
+  } catch (e) { msg('#ret-msg', 'Save failed: ' + e.message, false); }
+}
+$('#ret-save').onclick = saveRetention;
 $('#tx-save').onclick = () => saveEnv(['WHISPER_MODEL', 'WHISPER_THREADS'], '#tx-msg', ['transcribe']);
 $('#apply').onclick = async () => {
   try {

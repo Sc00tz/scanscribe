@@ -64,6 +64,9 @@ log "Installing config (existing files in $CONF_DIR are kept)"
 if ! grep -q '^WHISPER_MODEL=' "$CONF_DIR/scanscribe.env"; then
   sed -n '/^# --- Transcription/,$p' "$APP_DIR/config/scanscribe.env" >> "$CONF_DIR/scanscribe.env"
 fi
+if ! grep -q '^RETENTION_AUDIO_DAYS=' "$CONF_DIR/scanscribe.env"; then
+  sed -n '/^# --- Retention/,$p' "$APP_DIR/config/scanscribe.env" >> "$CONF_DIR/scanscribe.env"
+fi
 install -m 0644 "$APP_DIR/systemd/scanscribe-recorder.service" /etc/systemd/system/scanscribe-recorder.service
 install -m 0644 "$APP_DIR/systemd/scanscribe-web.service" /etc/systemd/system/scanscribe-web.service
 install -m 0644 "$APP_DIR/systemd/scanscribe-transcribe.service" /etc/systemd/system/scanscribe-transcribe.service

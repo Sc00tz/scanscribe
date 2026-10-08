@@ -34,7 +34,7 @@ def main():
     while True:
         with connect() as con:
             row = con.execute(
-                "SELECT id, audio_path, length_ms FROM calls WHERE transcribed_at IS NULL AND attempts<? "
+                "SELECT id, audio_path, length_ms FROM calls WHERE transcribed_at IS NULL AND audio_deleted=0 AND attempts<? "
                 "ORDER BY id DESC LIMIT 1", (MAX_ATTEMPTS,)).fetchone()
         if row is None:
             time.sleep(2)

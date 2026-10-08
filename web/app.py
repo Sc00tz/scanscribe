@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS calls (
   signal REAL, noise REAL, encrypted INTEGER, audio_type TEXT,
   transcript TEXT,
   transcribed_at INTEGER,
-  attempts INTEGER NOT NULL DEFAULT 0
+  attempts INTEGER NOT NULL DEFAULT 0,
+  audio_deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS calls_start ON calls(start_ms);
 CREATE INDEX IF NOT EXISTS calls_tg ON calls(talkgroup, start_ms);
@@ -59,6 +60,8 @@ def init_db():
         cols = {r[1] for r in con.execute("PRAGMA table_info(calls)")}
         if "transcribed_at" not in cols:  # upgrade a stage-2 database
             con.execute("ALTER TABLE calls ADD COLUMN transcribed_at INTEGER")
+        if "audio_deleted" not in cols:
+            con.execute("ALTER TABLE calls ADD COLUMN audio_deleted INTEGER NOT NULL DEFAULT 0")
         if "attempts" not in cols:
             con.execute("ALTER TABLE calls ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
         con.execute("PRAGMA journal_mode=WAL")
@@ -120,7 +123,7 @@ def ingest_loop():
 
 
 PUBLIC = ("id", "system", "freq", "talkgroup", "tag", "description", "category", "grp",
-          "start_ms", "length_ms", "src", "signal", "noise", "encrypted", "audio_type", "transcript")
+          "start_ms", "length_ms", "src", "signal", "noise", "encrypted", "audio_type", "transcript", "audio_deleted")
 MIME = {".m4a": "audio/mp4", ".wav": "audio/wav"}
 
 
@@ -159,6 +162,115 @@ def query_channels():
                       COUNT(*) AS calls, MAX(start_ms) AS last_ms
                FROM calls GROUP BY talkgroup ORDER BY tag""").fetchall()
         return [dict(r) for r in rows]
+
+
+# ----------------------------------------------------------------- retention
+RETENTION_INTERVAL = float(os.environ.get("RETENTION_INTERVAL", "600"))
+
+
+def retention_settings():
+    """Read retention days from the env file each time, so Settings changes need no restart."""
+    env = env_values() if ENV_PATH.exists() else {}
+
+    def days(key, default):
+        try:
+            return max(int(env.get(key, default)), 0)
+        except ValueError:
+            return default
+    return days("RETENTION_AUDIO_DAYS", 7), days("RETENTION_TEXT_DAYS", 0)
+
+
+def _unlink(path):
+    try:
+        path.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _inside(path):
+    root = CAPTURE_DIR.resolve()
+    try:
+        return root in path.resolve().parents
+    except OSError:
+        return False
+
+
+def run_retention(now=None):
+    """Delete audio (and optionally whole call entries) older than the configured days.
+    Returns (audio_removed, entries_removed). 0 days = keep forever."""
+    audio_days, text_days = retention_settings()
+    now = now or time.time()
+    audio_removed = entries_removed = 0
+    with connect() as con:
+        if audio_days > 0:
+            cutoff_ms = int((now - audio_days * 86400) * 1000)
+            rows = con.execute("SELECT id, audio_path, json_path FROM calls "
+                               "WHERE audio_deleted=0 AND start_ms<?", (cutoff_ms,)).fetchall()
+            for r in rows:
+                audio = CAPTURE_DIR / r["audio_path"]
+                if _inside(audio):
+                    for ext in (".m4a", ".wav", ".json"):
+                        _unlink(audio.with_suffix(ext))
+                jp = CAPTURE_DIR / r["json_path"]
+                if _inside(jp):
+                    _unlink(jp)
+                con.execute("UPDATE calls SET audio_deleted=1 WHERE id=?", (r["id"],))
+                audio_removed += 1
+            # leftovers never indexed (e.g. interrupted writes), once clearly past the cutoff
+            old = now - (audio_days + 1) * 86400
+            for f in CAPTURE_DIR.rglob("*"):
+                try:
+                    if f.is_file() and f.suffix in (".wav", ".m4a", ".json") and f.stat().st_mtime < old:
+                        f.unlink()
+                except OSError:
+                    pass
+        if text_days > 0:
+            cutoff_ms = int((now - text_days * 86400) * 1000)
+            rows = con.execute("SELECT id, audio_path, json_path FROM calls WHERE start_ms<?", (cutoff_ms,)).fetchall()
+            for r in rows:  # remove files too, or the indexer would re-add the entry
+                audio = CAPTURE_DIR / r["audio_path"]
+                if _inside(audio):
+                    for ext in (".m4a", ".wav", ".json"):
+                        _unlink(audio.with_suffix(ext))
+                jp = CAPTURE_DIR / r["json_path"]
+                if _inside(jp):
+                    _unlink(jp)
+            entries_removed = con.execute("DELETE FROM calls WHERE start_ms<?", (cutoff_ms,)).rowcount
+        con.commit()
+    # tidy empty folders (deepest first)
+    for d in sorted((x for x in CAPTURE_DIR.rglob("*") if x.is_dir()), key=lambda x: len(x.parts), reverse=True):
+        try:
+            d.rmdir()
+        except OSError:
+            pass
+    return audio_removed, entries_removed
+
+
+def retention_loop():
+    while True:
+        try:
+            a, e = run_retention()
+            if a or e:
+                print(f"retention: removed audio for {a} calls, deleted {e} entries", flush=True)
+        except Exception as exc:
+            print(f"retention error: {exc}", flush=True)
+        time.sleep(RETENTION_INTERVAL)
+
+
+def storage_stats():
+    total = count = 0
+    for f in CAPTURE_DIR.rglob("*"):
+        try:
+            if f.is_file() and f.suffix in (".wav", ".m4a"):
+                total += f.stat().st_size
+                count += 1
+        except OSError:
+            pass
+    with connect() as con:
+        oldest = con.execute("SELECT MIN(start_ms) FROM calls").fetchone()[0]
+        calls = con.execute("SELECT COUNT(*) FROM calls").fetchone()[0]
+    return {"audio_bytes": total, "audio_files": count, "calls": calls, "oldest_ms": oldest}
 
 
 # ------------------------------------------------------------------ settings
@@ -299,7 +411,12 @@ ENV_FIELDS = {
     "MIN_DURATION": lambda v: clean_number(v, "minimum call length", 0, 30),
     "WHISPER_MODEL": lambda v: clean_choice(v, ("tiny.en", "base.en", "small.en", "medium.en"), "whisper model"),
     "WHISPER_THREADS": lambda v: clean_number(v, "whisper threads", 1, 16, integer=True),
+    "RETENTION_AUDIO_DAYS": lambda v: clean_number(v, "audio retention (days)", 0, 3650, integer=True),
+    "RETENTION_TEXT_DAYS": lambda v: clean_number(v, "transcript retention (days)", 0, 3650, integer=True),
 }
+
+
+ENV_DEFAULTS = {"RETENTION_AUDIO_DAYS": "7", "RETENTION_TEXT_DAYS": "0"}  # in effect when absent from the file
 
 
 def read_env_text():
@@ -352,7 +469,9 @@ def get_settings():
     env = env_values()
     return {
         "channels": read_master_rows(),
-        "env": {k: env.get(k, "") for k in ENV_FIELDS},
+        "env": {k: env.get(k, ENV_DEFAULTS.get(k, "")) for k in ENV_FIELDS},
+        "retention": {"audio_days": retention_settings()[0], "text_days": retention_settings()[1]},
+        "storage": storage_stats(),
         "status": {"recorder": service_state("scanscribe-recorder"),
                    "transcribe": service_state("scanscribe-transcribe")},
     }
@@ -468,7 +587,7 @@ class Handler(BaseHTTPRequestHandler):
         if not id_text.isdigit():
             return self.fail(404)
         with connect() as con:
-            r = con.execute("SELECT audio_path FROM calls WHERE id=?", (int(id_text),)).fetchone()
+            r = con.execute("SELECT audio_path FROM calls WHERE id=? AND audio_deleted=0", (int(id_text),)).fetchone()
         if not r:
             return self.fail(404)
         path = (CAPTURE_DIR / r["audio_path"]).resolve()
@@ -516,6 +635,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     init_db()
     threading.Thread(target=ingest_loop, daemon=True).start()
+    threading.Thread(target=retention_loop, daemon=True).start()
     host = os.environ.get("WEB_HOST", "0.0.0.0")
     port = int(os.environ.get("WEB_PORT", "8080"))
     ThreadingHTTPServer((host, port), Handler).serve_forever()

@@ -1,0 +1,13 @@
+enabled,mode,freq_mhz,alpha_tag,description,category,tag,tone,nac,squelch
+true,analog,154.355,Fire Dispatch,Capital Area Fire Dispatch,Capital Area Mutual Aid,Fire Dispatch,,,
+true,analog,154.235,Fire Ground 2,Capital Area Fire Ground 2,Capital Area Mutual Aid,Fire Tac,,,
+true,analog,154.220,Fire Ground 3,Capital Area Fire Ground 3,Capital Area Mutual Aid,Fire Tac,,,
+true,analog,154.310,Fire Ground 5,Capital Area Fire Ground 5,Capital Area Mutual Aid,Fire Tac,,,
+true,analog,154.370,Fire Ground 6,Capital Area Fire Ground 6,Capital Area Mutual Aid,Fire Tac,,,
+true,analog,154.2275,Fire Ground 8,Capital Area Fire Ground 8,Capital Area Mutual Aid,Fire Tac,,,
+true,analog,155.340,Med 1,Capital Area EMS Med 1,Capital Area Mutual Aid,EMS Dispatch,,,
+true,analog,155.385,Med 2,Capital Area EMS Med 2,Capital Area Mutual Aid,EMS Tac,,,
+true,analog,155.280,Med 3,Capital Area EMS Med 3,Capital Area Mutual Aid,EMS Tac,,,
+true,analog,155.025,EOC CH2,Emergency Operations Center Ch 2,Capital Area Mutual Aid,Interop,,,
+true,p25,155.625,Concord PD 1,Concord Police Primary,Concord NH,Law Dispatch,,117,
+true,p25,155.820,Concord PD 2,Concord Police Secondary,Concord NH,Law Tac,,ACE,

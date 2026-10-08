@@ -1,0 +1,19 @@
+[Unit]
+Description=ScanScribe recorder (Trunk Recorder)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=scanscribe
+Group=scanscribe
+SupplementaryGroups=plugdev
+# Regenerate Trunk Recorder config from /etc/scanscribe on every start
+ExecStartPre=/usr/bin/python3 /opt/scanscribe/container/generate_config.py
+WorkingDirectory=/var/lib/scanscribe/tr
+ExecStart=/usr/local/bin/trunk-recorder --config=/var/lib/scanscribe/tr/config.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

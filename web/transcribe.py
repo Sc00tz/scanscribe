@@ -11,6 +11,8 @@ THREADS = int(os.environ.get("WHISPER_THREADS", "2"))
 LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "en")
 PROMPT = os.environ.get("WHISPER_PROMPT", "Police, fire and EMS radio dispatch in Concord, New Hampshire.")
 MAX_ATTEMPTS = 3
+# Calls longer than this are never sent to whisper (a stuck-open squelch can make multi-hour "calls")
+MAX_CALL_SECONDS = int(os.environ.get("WHISPER_MAX_CALL_SECONDS", "300"))
 
 
 def load_model():
@@ -32,14 +34,17 @@ def main():
     while True:
         with connect() as con:
             row = con.execute(
-                "SELECT id, audio_path FROM calls WHERE transcribed_at IS NULL AND attempts<? "
+                "SELECT id, audio_path, length_ms FROM calls WHERE transcribed_at IS NULL AND attempts<? "
                 "ORDER BY id DESC LIMIT 1", (MAX_ATTEMPTS,)).fetchone()
         if row is None:
             time.sleep(2)
             continue
         started = time.time()
         try:
-            text = transcribe(model, CAPTURE_DIR / row["audio_path"])
+            if (row["length_ms"] or 0) > MAX_CALL_SECONDS * 1000:
+                text = "[call too long to transcribe]"
+            else:
+                text = transcribe(model, CAPTURE_DIR / row["audio_path"])
             with connect() as con:
                 con.execute("UPDATE calls SET transcript=?, transcribed_at=? WHERE id=?",
                             (text, int(time.time()), row["id"]))

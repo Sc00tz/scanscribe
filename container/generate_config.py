@@ -29,6 +29,7 @@ DEFAULTS = {
     "P25_MODULATION": "fsk4",
     "CAPTURE_DIR": "/var/lib/scanscribe/recordings",
     "MIN_DURATION": "1.0",
+    "MAX_DURATION": "300",
     "LOG_LEVEL": "info",
 }
 
@@ -136,6 +137,7 @@ def _build(cfg, chans, outdir):
             "squelch": int(cfg["ANALOG_SQUELCH"]),
             "callLog": True, "audioArchive": True, "compressWav": True,
             "minDuration": float(cfg["MIN_DURATION"]),
+            "maxDuration": float(cfg["MAX_DURATION"]),
         })
     if p25:
         write_channel_file(os.path.join(outdir, "p25_channels.csv"), p25, used)
@@ -146,6 +148,7 @@ def _build(cfg, chans, outdir):
             "squelch": int(cfg["P25_SQUELCH"]),
             "callLog": True, "audioArchive": True, "compressWav": True,
             "minDuration": float(cfg["MIN_DURATION"]),
+            "maxDuration": float(cfg["MAX_DURATION"]),
         })
 
     source = {

@@ -65,7 +65,8 @@ def init_db():
             con.execute("ALTER TABLE calls ADD COLUMN audio_deleted INTEGER NOT NULL DEFAULT 0")
         if "attempts" not in cols:
             con.execute("ALTER TABLE calls ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
-        for col, ddl in (("emergency", "INTEGER NOT NULL DEFAULT 0"), ("units", "TEXT"), ("err_pct", "INTEGER")):
+        for col, ddl in (("emergency", "INTEGER NOT NULL DEFAULT 0"), ("units", "TEXT"), ("err_pct", "INTEGER"),
+                          ("src_times", "TEXT"), ("turns", "TEXT")):
             if col not in cols:
                 con.execute(f"ALTER TABLE calls ADD COLUMN {col} {ddl}")
         con.execute("PRAGMA journal_mode=WAL")
@@ -98,18 +99,23 @@ def call_extras(d: dict):
         except (TypeError, ValueError):
             pass
     err_pct = round(100 * bad / total) if total > 0 and d.get("audio_type") == "digital" else None
-    return emergency, json.dumps(units), err_pct
+    times = []
+    for s_ in src_list:
+        u, pos = s_.get("src"), s_.get("pos")
+        if isinstance(u, int) and u > 0 and isinstance(pos, (int, float)):
+            times.append([u, round(float(pos), 2)])
+    return emergency, json.dumps(units), err_pct, json.dumps(times)
 
 
 def backfill_extras(con):
     """Fill the new detail columns for calls indexed before they existed."""
-    rows = con.execute("SELECT id, json_path FROM calls WHERE units IS NULL").fetchall()
+    rows = con.execute("SELECT id, json_path FROM calls WHERE units IS NULL OR src_times IS NULL").fetchall()
     for r in rows:
         try:
             d = json.loads((CAPTURE_DIR / r["json_path"]).read_text())
         except (OSError, ValueError):
             d = {}
-        con.execute("UPDATE calls SET emergency=?, units=?, err_pct=? WHERE id=?", (*call_extras(d), r["id"]))
+        con.execute("UPDATE calls SET emergency=?, units=?, err_pct=?, src_times=? WHERE id=?", (*call_extras(d), r["id"]))
     con.commit()
 
 
@@ -136,8 +142,8 @@ def ingest_once(con) -> int:
             """INSERT OR IGNORE INTO calls
             (json_path, audio_path, system, freq, talkgroup, tag, description, category, grp,
              start_ms, length_ms, src, signal, noise, encrypted, audio_type,
-             emergency, units, err_pct)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             emergency, units, err_pct, src_times)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (rel, str(audio.relative_to(CAPTURE_DIR)), d.get("short_name"), d.get("freq"),
              d.get("talkgroup"), d.get("talkgroup_tag"), d.get("talkgroup_description"),
              d.get("talkgroup_group"), d.get("talkgroup_group_tag"),
@@ -169,7 +175,7 @@ def ingest_loop():
 
 PUBLIC = ("id", "system", "freq", "talkgroup", "tag", "description", "category", "grp",
           "start_ms", "length_ms", "src", "signal", "noise", "encrypted", "audio_type", "transcript", "audio_deleted",
-          "emergency", "units", "err_pct")
+          "emergency", "units", "err_pct", "turns")
 MIME = {".m4a": "audio/mp4", ".wav": "audio/wav"}
 
 
@@ -201,10 +207,11 @@ def query_calls(q):
         out = []
         for r in con.execute(sql, args + [limit]):
             row = {k: r[k] for k in PUBLIC}
-            try:
-                row["units"] = json.loads(row["units"] or "[]")
-            except ValueError:
-                row["units"] = []
+            for k in ("units", "turns"):
+                try:
+                    row[k] = json.loads(row[k] or "[]")
+                except ValueError:
+                    row[k] = []
             out.append(row)
         return out
 

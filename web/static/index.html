@@ -38,6 +38,8 @@
   .unit { background: none; border: 0; border-bottom: 1px dotted var(--dim); color: inherit; font: inherit;
           padding: 0; margin-right: 8px; cursor: pointer; }
   .unit:hover, .unit:focus-visible { color: var(--accent); border-bottom-color: var(--accent); }
+  .turn { margin: 2px 0; } .unit.who { font-weight: 600; margin-right: 6px; }
+  .unit.who::after { content: ':'; }
   .call.playing { outline: 2px solid var(--accent); }
   .call.fresh { animation: flash 2s ease-out; }
   @keyframes flash { from { background: color-mix(in srgb, var(--accent) 25%, var(--panel)); } }
@@ -223,7 +225,18 @@ function fmtTime(ms) {
 }
 function setTx(div, c) {
   const t = div.querySelector('.tx');
-  if (c.transcript) { t.textContent = c.transcript; t.className = 'tx'; }
+  if (c.transcript && c.turns && c.turns.length > 1) {
+    t.textContent = ''; t.className = 'tx turns';
+    c.turns.forEach(turn => {
+      const line = document.createElement('div'); line.className = 'turn';
+      const who = document.createElement('button');
+      who.className = 'unit who'; who.dataset.u = turn.src; who.title = 'Click to name this radio';
+      who.textContent = unitLabel(turn.src); who.onclick = () => renameUnit(turn.src);
+      line.append(who, document.createTextNode(turn.text));
+      t.append(line);
+    });
+  }
+  else if (c.transcript) { t.textContent = c.transcript; t.className = 'tx'; }
   else if (c.transcript === '') { t.textContent = '(no speech detected)'; t.className = 'tx none'; }
   else { t.textContent = 'Transcribing…'; t.className = 'tx none'; }
 }

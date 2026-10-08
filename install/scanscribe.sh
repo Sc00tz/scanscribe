@@ -88,7 +88,7 @@ choose TMPL_STORAGE "Storage for the OS template:" "${tmpl_stores[@]}"
 
 ask DISK_GB "Disk size in GB (recordings + OS; stage 1 audio is small)" "32"
 ask CORES "CPU cores" "2"
-ask RAM_MB "RAM in MB (Trunk Recorder build needs ~3000+, runtime less)" "4096"
+ask RAM_MB "RAM in MB (recorder + web + whisper transcription; 4096 proved too tight, 8192 is comfortable)" "8192"
 
 mapfile -t bridges < <(ip -o link show type bridge | awk -F': ' '{print $2}')
 choose BRIDGE "Network bridge:" "${bridges[@]}"

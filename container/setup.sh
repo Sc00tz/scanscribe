@@ -86,6 +86,8 @@ systemctl daemon-reload
 systemctl enable --now scanscribe-apply.path
 systemctl enable scanscribe-web.service
 systemctl restart scanscribe-web.service   # web only; never touches the recorder
+# Stop the worker first so two whisper processes are never in memory at once
+systemctl stop scanscribe-transcribe.service 2>/dev/null || true
 # Download the whisper model now so a failure shows up at install time, not later
 model=$(sed -n 's/^WHISPER_MODEL=//p' "$CONF_DIR/scanscribe.env" | tail -1); model="${model:-small.en}"
 if runuser -u scanscribe -- env HF_HOME="$DATA_DIR/hf" "$APP_DIR/venv/bin/python" -c \

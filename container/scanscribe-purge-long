@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Delete runaway recordings: calls longer than N seconds (default 300), plus any
+audio file over 50 MB, and their database rows. Run as: runuser -u scanscribe -- python3 <this>"""
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/opt/scanscribe/web")
+from app import CAPTURE_DIR, connect  # noqa: E402
+
+limit_s = int(sys.argv[1]) if len(sys.argv) > 1 else 300
+freed = 0
+removed = 0
+
+
+def remove(path):
+    global freed, removed
+    try:
+        size = path.stat().st_size
+        path.unlink()
+        freed += size
+        removed += 1
+        print(f"removed {size / 1e6:9.1f} MB  {path.relative_to(CAPTURE_DIR)}")
+    except FileNotFoundError:
+        pass
+
+
+with connect() as con:
+    rows = con.execute("SELECT id, audio_path, json_path FROM calls WHERE length_ms > ?",
+                       (limit_s * 1000,)).fetchall()
+    for r in rows:
+        audio = CAPTURE_DIR / r["audio_path"]
+        for ext in (".m4a", ".wav", ".json"):
+            remove(audio.with_suffix(ext))
+        remove(CAPTURE_DIR / r["json_path"])
+    con.execute("DELETE FROM calls WHERE length_ms > ?", (limit_s * 1000,))
+    # Anything huge that never got indexed (e.g. interrupted while being written)
+    for p in CAPTURE_DIR.rglob("*"):
+        if p.is_file() and p.suffix in (".wav", ".m4a") and p.stat().st_size > 50_000_000:
+            remove(p)
+            remove(p.with_suffix(".json"))
+    con.commit()
+
+print(f"\n{len(rows)} long calls removed from the archive; {removed} files deleted, {freed / 1e9:.2f} GB freed")

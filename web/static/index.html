@@ -38,6 +38,12 @@
   .unit { background: none; border: 0; border-bottom: 1px dotted var(--dim); color: inherit; font: inherit;
           padding: 0; margin-right: 8px; cursor: pointer; }
   .unit:hover, .unit:focus-visible { color: var(--accent); border-bottom-color: var(--accent); }
+  .code { border-bottom: 1px dotted var(--dim); cursor: help; position: relative; }
+  .code:hover::after, .code:focus::after { content: attr(data-tip); position: absolute; left: 0; top: 1.5em; z-index: 5;
+      white-space: nowrap; background: var(--text); color: var(--bg); font-size: 12px; padding: 3px 8px; border-radius: 5px; }
+  #ref table { border-collapse: collapse; width: 100%; max-width: 640px; margin-bottom: 18px; }
+  #ref td, #ref th { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  #ref h3 { margin: 18px 0 6px; font-size: 15px; }
   .turn { margin: 2px 0; } .unit.who { font-weight: 600; margin-right: 6px; }
   .unit.who::after { content: ':'; }
   .call.playing { outline: 2px solid var(--accent); }
@@ -105,7 +111,7 @@
 <body>
 <header>
   <h1>ScanScribe</h1>
-  <nav><button id="tab-live" class="on">Live</button><button id="tab-archive">Archive</button><button id="tab-settings">Settings</button></nav>
+  <nav><button id="tab-live" class="on">Live</button><button id="tab-archive">Archive</button><button id="tab-ref">Reference</button><button id="tab-settings">Settings</button></nav>
 </header>
 <main>
   <section id="live">
@@ -140,6 +146,11 @@
     </div>
     <div id="arch-list"></div>
     <div class="bar" style="justify-content:center"><button id="more" class="btn" hidden>Load more</button></div>
+  </section>
+  <section id="ref" hidden>
+    <div class="bar"><input id="ref-q" type="search" placeholder="Search codes, towns, units" aria-label="Search the reference"></div>
+    <p class="meta" id="ref-note"></p>
+    <div id="ref-body"></div>
   </section>
   <section id="settings" hidden>
     <div class="banner" id="pending" hidden>
@@ -223,6 +234,19 @@ function fmtTime(ms) {
   return d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' +
          d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit', second: '2-digit'});
 }
+let tenCodes = {};
+function addText(parent, text) {
+  const re = /\b10[- ](\d{1,2})\b/g; let last = 0, m;
+  while ((m = re.exec(text))) {
+    const meaning = tenCodes['10-' + m[1]];
+    if (!meaning) continue;
+    parent.append(document.createTextNode(text.slice(last, m.index)));
+    const sp = document.createElement('span');
+    sp.className = 'code'; sp.tabIndex = 0; sp.dataset.tip = '10-' + m[1] + ': ' + meaning; sp.textContent = m[0];
+    parent.append(sp); last = m.index + m[0].length;
+  }
+  parent.append(document.createTextNode(text.slice(last)));
+}
 function setTx(div, c) {
   const t = div.querySelector('.tx');
   if (c.transcript && c.turns && c.turns.length > 1) {
@@ -232,11 +256,11 @@ function setTx(div, c) {
       const who = document.createElement('button');
       who.className = 'unit who'; who.dataset.u = turn.src; who.title = 'Click to name this radio';
       who.textContent = unitLabel(turn.src); who.onclick = () => renameUnit(turn.src);
-      line.append(who, document.createTextNode(turn.text));
+      line.append(who); addText(line, turn.text);
       t.append(line);
     });
   }
-  else if (c.transcript) { t.textContent = c.transcript; t.className = 'tx'; }
+  else if (c.transcript) { t.textContent = ''; addText(t, c.transcript); t.className = 'tx'; }
   else if (c.transcript === '') { t.textContent = '(no speech detected)'; t.className = 'tx none'; }
   else { t.textContent = 'Transcribing…'; t.className = 'tx none'; }
 }
@@ -522,19 +546,51 @@ loadChannels();
 
 // ---- Tabs
 function tab(name) {
-  for (const t of ['live', 'archive', 'settings']) {
+  for (const t of ['live', 'archive', 'ref', 'settings']) {
     $('#' + t).hidden = name !== t; $('#tab-' + t).classList.toggle('on', name === t);
   }
   if (name === 'settings') loadSettings().catch(() => {});
   if (name === 'live') loadChannels();
+  if (name === 'ref') loadRef();
   if (name === 'archive') { loadChannels(); loadArchive(true); }
 }
 $('#tab-live').onclick = () => tab('live');
 $('#tab-archive').onclick = () => tab('archive');
+$('#tab-ref').onclick = () => tab('ref');
 $('#tab-settings').onclick = () => tab('settings');
 
-loadUnits();
-pollLive(true);
+// ---- Reference
+let refData = null;
+async function loadCodes() {
+  try { refData = await api('/api/codes'); tenCodes = refData.tencodes || {}; } catch (e) {}
+}
+function refTable(title, head, rows, q) {
+  const shown = rows.filter(r => !q || r.join(' ').toLowerCase().includes(q));
+  if (!shown.length) return null;
+  const box = document.createElement('div');
+  const h = document.createElement('h3'); h.textContent = title; box.append(h);
+  const tb = document.createElement('table');
+  const hr = tb.insertRow(); head.forEach(x => { const th = document.createElement('th'); th.textContent = x; hr.append(th); });
+  shown.forEach(r => { const tr = tb.insertRow(); r.forEach(x => { tr.insertCell().textContent = x; }); });
+  box.append(tb); return box;
+}
+async function loadRef() {
+  if (!refData) await loadCodes();
+  const body = $('#ref-body'); body.textContent = '';
+  if (!refData) { body.textContent = 'The reference could not be loaded.'; return; }
+  $('#ref-note').textContent = refData.source + '. ' + refData.note;
+  const q = $('#ref-q').value.trim().toLowerCase();
+  [refTable('10-codes', ['Code', 'Meaning'], Object.entries(refData.tencodes), q),
+   refTable('Capital Area fire community numbers', ['Number', 'Community'], refData.communities, q),
+   refTable('Capital Area unit types', ['Letter', 'Meaning'], refData.unit_types, q),
+   refTable('Merrimack County Sheriff unit numbers', ['Number', 'Agency'], refData.sheriff_units, q)]
+    .forEach(t => { if (t) body.append(t); });
+  if (!body.children.length) body.textContent = 'Nothing matches that search.';
+}
+$('#ref-q').addEventListener('input', loadRef);
+
+
+Promise.all([loadUnits(), loadCodes()]).then(() => pollLive(true));
 setInterval(() => pollLive(false), 2000);
 </script>
 </body>

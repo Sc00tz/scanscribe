@@ -16,6 +16,22 @@ MAX_ATTEMPTS = 3
 MAX_CALL_SECONDS = int(os.environ.get("WHISPER_MAX_CALL_SECONDS", "300"))
 
 
+def build_prompt():
+    """Base prompt plus local place names and unit types so whisper spells them right.
+    Whisper only keeps the last ~220 tokens of the prompt, so the hints are kept short."""
+    base = PROMPT
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "codes.json"), encoding="utf-8") as f:
+            data = json.load(f)
+        places = [n for _, n in data["communities"]
+                  if not any(w in n for w in ("Team", "Academy", "Rescue", "Ambulance"))]
+        base += (" Towns: " + ", ".join(places) + ". Units: Engine, Ladder, Tower, Rescue, Tanker,"
+                 " Forestry, Ambulance, Tri-Town Ambulance, Penacook Rescue, Chief, Capital Area.")
+    except (OSError, ValueError, KeyError):
+        pass
+    return base
+
+
 def load_model():
     from faster_whisper import WhisperModel
     print(f"loading whisper model {MODEL} (cpu int8, {THREADS} threads)", flush=True)
@@ -45,10 +61,10 @@ def split_turns(words, src_times):
     return [t for t in turns if t["text"]]
 
 
-def transcribe(model, path, src_times):
+def transcribe(model, path, src_times, prompt=None):
     segments, _info = model.transcribe(
         str(path), language=LANGUAGE, vad_filter=True, beam_size=5,
-        condition_on_previous_text=False, initial_prompt=PROMPT or None,
+        condition_on_previous_text=False, initial_prompt=prompt or None,
         word_timestamps=bool(src_times))
     segments = list(segments)
     text = " ".join(s.text.strip() for s in segments).strip()
@@ -62,6 +78,7 @@ def transcribe(model, path, src_times):
 def main():
     init_db()
     model = load_model()
+    prompt = build_prompt()
     while True:
         with connect() as con:
             row = con.execute(
@@ -80,7 +97,7 @@ def main():
                     times = json.loads(row["src_times"] or "[]")
                 except ValueError:
                     times = []
-                text, turns = transcribe(model, CAPTURE_DIR / row["audio_path"], times)
+                text, turns = transcribe(model, CAPTURE_DIR / row["audio_path"], times, prompt)
             with connect() as con:
                 con.execute("UPDATE calls SET transcript=?, turns=?, transcribed_at=? WHERE id=?",
                             (text, json.dumps(turns) if turns else None, int(time.time()), row["id"]))

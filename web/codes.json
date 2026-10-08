@@ -1,0 +1,256 @@
+{
+ "source": "RadioReference Wiki, Merrimack County (NH), last edited 28 November 2023",
+ "tencodes": {
+  "10-1": "In Service",
+  "10-2": "Out of Service / Off the Air",
+  "10-3": "Go Ahead",
+  "10-4": "Repeat Message",
+  "10-5": "Message Received",
+  "10-6": "Stand-By",
+  "10-7": "Unable to Copy",
+  "10-8": "Transporting - Can't Talk",
+  "10-9": "Call by Telephone",
+  "10-10": "Phone you can be Reached At",
+  "10-11": "Report to...",
+  "10-12": "Disregard",
+  "10-13": "Assist Motorist",
+  "10-14": "Meal Break",
+  "10-15": "Off at Court",
+  "10-16": "Abandoned Vehicle",
+  "10-17": "Subject in Custody",
+  "10-18": "Location",
+  "10-19": "D.U.I.",
+  "10-20": "License Plate Check",
+  "10-21": "Driver History",
+  "10-22": "Driver Status",
+  "10-23": "N.C.I.C. Check",
+  "10-24": "Criminal Records Check"
+ },
+ "sheriff_units": [
+  [
+   "100",
+   "Boscawen PD"
+  ],
+  [
+   "200",
+   "Warner PD"
+  ],
+  [
+   "250",
+   "Salisbury PD (no longer active)"
+  ],
+  [
+   "300",
+   "Danbury PD"
+  ],
+  [
+   "400",
+   "Loudon PD"
+  ],
+  [
+   "450",
+   "Pittsfield PD"
+  ],
+  [
+   "500",
+   "Canterbury PD"
+  ],
+  [
+   "550",
+   "Henniker PD"
+  ],
+  [
+   "600",
+   "Hopkinton PD"
+  ],
+  [
+   "700",
+   "Chichester PD"
+  ],
+  [
+   "800",
+   "Webster PD"
+  ],
+  [
+   "MC",
+   "Sheriff patrols"
+  ],
+  [
+   "Ranger",
+   "USACE Rangers"
+  ],
+  [
+   "SP",
+   "State Police"
+  ]
+ ],
+ "communities": [
+  [
+   "50",
+   "Allenstown"
+  ],
+  [
+   "51",
+   "Boscawen"
+  ],
+  [
+   "52",
+   "Bow"
+  ],
+  [
+   "53",
+   "Canterbury"
+  ],
+  [
+   "54",
+   "Chichester"
+  ],
+  [
+   "55",
+   "Concord"
+  ],
+  [
+   "56",
+   "Epsom"
+  ],
+  [
+   "57",
+   "Dunbarton"
+  ],
+  [
+   "58",
+   "Henniker"
+  ],
+  [
+   "59",
+   "Hillsborough"
+  ],
+  [
+   "60",
+   "Hopkinton"
+  ],
+  [
+   "61",
+   "Loudon"
+  ],
+  [
+   "62",
+   "Pembroke"
+  ],
+  [
+   "63",
+   "Hooksett"
+  ],
+  [
+   "64",
+   "Penacook Rescue Squad"
+  ],
+  [
+   "65",
+   "Webster"
+  ],
+  [
+   "66",
+   "Central New Hampshire Haz-Mat Team"
+  ],
+  [
+   "67",
+   "New Hampshire Fire Academy"
+  ],
+  [
+   "71",
+   "Northwood"
+  ],
+  [
+   "72",
+   "Pittsfield"
+  ],
+  [
+   "74",
+   "Salisbury"
+  ],
+  [
+   "75",
+   "Weare"
+  ],
+  [
+   "76",
+   "New Boston"
+  ],
+  [
+   "79",
+   "Tri-Town Ambulance"
+  ],
+  [
+   "80",
+   "Warner"
+  ],
+  [
+   "82",
+   "Bradford"
+  ],
+  [
+   "84",
+   "Deering"
+  ]
+ ],
+ "unit_types": [
+  [
+   "Ambulance",
+   "Ambulance (formerly X)"
+  ],
+  [
+   "Boat",
+   "Boat"
+  ],
+  [
+   "C",
+   "Chief officer"
+  ],
+  [
+   "E",
+   "Engine (formerly M)"
+  ],
+  [
+   "Forestry",
+   "Forestry"
+  ],
+  [
+   "Forestry Tanker",
+   "Forestry tanker"
+  ],
+  [
+   "Ladder",
+   "Ladder"
+  ],
+  [
+   "O",
+   "Officer"
+  ],
+  [
+   "R",
+   "Member of department"
+  ],
+  [
+   "Rescue",
+   "Rescue"
+  ],
+  [
+   "Tanker",
+   "Tanker (formerly K)"
+  ],
+  [
+   "Tower",
+   "Tower"
+  ],
+  [
+   "Utility",
+   "Utility"
+  ],
+  [
+   "CAP AREA 1",
+   "Capital Area mutual aid coordinator"
+  ]
+ ],
+ "note": "The 10-codes are listed on that page as police codes. The page does not say which agencies use them. Capital Area fire no longer says the community numbers on the air (Scan New England Wiki), but they are still used for radio IDs and incident tracking."
+}

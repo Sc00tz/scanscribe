@@ -634,6 +634,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(live_channels())
             elif url.path == "/api/units":
                 self.send_json(get_units())
+            elif url.path == "/api/codes":
+                self.send_file(Path(__file__).parent / "codes.json", "application/json", range_ok=False)
             elif url.path == "/api/settings":
                 self.send_json(get_settings())
             elif url.path == "/api/channels":

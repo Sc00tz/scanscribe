@@ -1,0 +1,17 @@
+[Unit]
+Description=ScanScribe web interface
+After=network-online.target
+
+[Service]
+Type=simple
+User=scanscribe
+Group=scanscribe
+EnvironmentFile=-/etc/scanscribe/scanscribe.env
+Environment=DB_PATH=/var/lib/scanscribe/scanscribe.db
+WorkingDirectory=/opt/scanscribe/web
+ExecStart=/usr/bin/python3 /opt/scanscribe/web/app.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

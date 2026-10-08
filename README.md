@@ -2,9 +2,9 @@
 
 Self-hosted scanner recorder for Proxmox: an RTL-SDR dongle in an LXC container records
 police/fire/EMS channels with [Trunk Recorder](https://github.com/TrunkRecorder/trunk-recorder).
-Planned next: speech-to-text (faster-whisper), a live feed, a searchable archive and a settings UI.
+Web UI (live feed + archive + player) is in; speech-to-text is next.
 
-**Status: stage 1 (recording only).** Untested on real hardware as of this commit.
+**Status:** recording works on real hardware (verified: a P25 call recorded with clean audio). Web UI is new. Transcription is not built yet.
 
 ## Install (on the Proxmox host, as root)
 
@@ -48,4 +48,5 @@ Install takes a while: Trunk Recorder is compiled from source (v5.2.1) inside th
 | `install/scanscribe.sh` | Proxmox host installer |
 | `container/setup.sh` | runs inside the LXC: deps, builds Trunk Recorder, installs service |
 | `container/generate_config.py` | master channel CSV + env -> Trunk Recorder config |
+| `web/` | web interface (stdlib Python, port 8080): live feed, archive, player |
 | `config/` | default channel list and settings |

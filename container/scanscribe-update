@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Pull the latest ScanScribe code and re-run setup. Safe on a running system:
+# Trunk Recorder is not rebuilt or restarted; config files in /etc/scanscribe are kept.
+set -Eeuo pipefail
+cd /opt/scanscribe
+git pull --ff-only
+bash /opt/scanscribe/container/setup.sh
+echo "Note: if config generation changed, apply it with: systemctl restart scanscribe-recorder"

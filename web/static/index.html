@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScanScribe</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171c22; --line: #262d36; --text: #e6e9ee; --dim: #8b95a3;
+    --accent: #4cc2ff; --fire: #ff7a45; --ems: #4ade80; --law: #7aa2ff; --other: #b794f4;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f4f6f8; --panel: #fff; --line: #dde2e8; --text: #1a2028; --dim: #5d6876; --accent: #0a74c9; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding-bottom: 96px; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--line);
+           position: sticky; top: 0; background: var(--bg); z-index: 2; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .3px; }
+  nav button { background: none; border: 0; color: var(--dim); font: inherit; padding: 6px 12px; cursor: pointer;
+               border-bottom: 2px solid transparent; }
+  nav button.on { color: var(--text); border-bottom-color: var(--accent); }
+  main { max-width: 900px; margin: 0 auto; padding: 12px 16px; }
+  .bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  select, input, .btn { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+                        border-radius: 6px; padding: 7px 10px; font: inherit; }
+  .btn { cursor: pointer; }
+  .btn.on { border-color: var(--accent); color: var(--accent); }
+  .call { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: center;
+          background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--other);
+          border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .call.fire { border-left-color: var(--fire); } .call.ems { border-left-color: var(--ems); }
+  .call.law { border-left-color: var(--law); }
+  .call.playing { outline: 2px solid var(--accent); }
+  .call.fresh { animation: flash 2s ease-out; }
+  @keyframes flash { from { background: color-mix(in srgb, var(--accent) 25%, var(--panel)); } }
+  .play { width: 38px; height: 38px; border-radius: 50%; border: 0; background: var(--accent); color: #fff;
+          font-size: 14px; cursor: pointer; grid-row: span 2; }
+  .tag { font-weight: 600; } .meta { color: var(--dim); font-size: 13px; }
+  .time { color: var(--dim); font-size: 13px; text-align: right; }
+  .empty { color: var(--dim); text-align: center; padding: 40px 0; }
+  footer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
+           padding: 10px 16px; display: flex; gap: 12px; align-items: center; }
+  footer audio { flex: 1; min-width: 0; } #now { font-size: 13px; color: var(--dim); min-width: 120px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ScanScribe</h1>
+  <nav><button id="tab-live" class="on">Live</button><button id="tab-archive">Archive</button></nav>
+</header>
+<main>
+  <section id="live">
+    <div class="bar">
+      <button id="auto" class="btn">Auto-play new calls: off</button>
+      <span class="meta" id="live-status"></span>
+    </div>
+    <div id="live-list"></div>
+  </section>
+  <section id="archive" hidden>
+    <div class="bar">
+      <select id="f-channel"><option value="">All channels</option></select>
+      <label class="meta">From <input type="date" id="f-from"></label>
+      <label class="meta">To <input type="date" id="f-to"></label>
+      <button id="f-go" class="btn">Search</button>
+    </div>
+    <div id="arch-list"></div>
+    <div class="bar" style="justify-content:center"><button id="more" class="btn" hidden>Load more</button></div>
+  </section>
+</main>
+<footer><span id="now">Nothing playing</span><audio id="player" controls preload="none"></audio></footer>
+<script>
+const $ = s => document.querySelector(s);
+const player = $('#player');
+let queue = [], auto = false, playingId = null;
+
+function cls(c) {
+  const t = ((c.category || '') + ' ' + (c.grp || '') + ' ' + (c.tag || '')).toLowerCase();
+  if (/fire/.test(t)) return 'fire';
+  if (/ems|med/.test(t)) return 'ems';
+  if (/law|police|pd/.test(t)) return 'law';
+  return '';
+}
+function fmtTime(ms) {
+  const d = new Date(ms);
+  return d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' +
+         d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit', second: '2-digit'});
+}
+function el(c, fresh) {
+  const div = document.createElement('div');
+  div.className = 'call ' + cls(c) + (fresh ? ' fresh' : '');
+  div.dataset.id = c.id;
+  const mhz = c.freq ? (c.freq / 1e6).toFixed(4) + ' MHz' : '';
+  const unit = c.src ? ' · unit ' + c.src : '';
+  const enc = c.encrypted ? ' · ENCRYPTED' : '';
+  div.innerHTML = '<button class="play" title="Play">▶</button>' +
+    '<div><span class="tag"></span> <span class="meta"></span></div>' +
+    '<div class="time"></div><div class="meta sub"></div><div class="meta" style="text-align:right"></div>';
+  div.querySelector('.tag').textContent = c.tag || ('TG ' + c.talkgroup);
+  div.querySelector('.meta').textContent = '· ' + (c.description || '');
+  div.querySelector('.time').textContent = fmtTime(c.start_ms);
+  div.querySelector('.sub').textContent = mhz + unit + enc;
+  div.children[4].textContent = ((c.length_ms || 0) / 1000).toFixed(1) + ' s';
+  div.querySelector('.play').onclick = () => play(c);
+  return div;
+}
+function play(c) {
+  playingId = c.id;
+  document.querySelectorAll('.call').forEach(n => n.classList.toggle('playing', +n.dataset.id === c.id));
+  $('#now').textContent = (c.tag || 'TG ' + c.talkgroup) + ' ' + fmtTime(c.start_ms);
+  player.src = '/audio/' + c.id;
+  player.play().catch(() => {});
+}
+player.addEventListener('ended', () => { const n = queue.shift(); if (n) play(n); });
+
+async function api(path) { const r = await fetch(path); if (!r.ok) throw new Error(r.status); return r.json(); }
+
+// ---- Live
+let lastId = 0;
+async function pollLive(first) {
+  try {
+    const calls = await api('/api/calls?limit=' + (first ? 30 : 100) + (lastId ? '&after_id=' + lastId : ''));
+    if (calls.length) {
+      lastId = Math.max(lastId, ...calls.map(c => c.id));
+      $('#live-list').querySelector('.empty')?.remove();
+      // newest-first from API; insert oldest first so newest ends on top
+      for (const c of calls.slice().reverse()) {
+        $('#live-list').prepend(el(c, !first));
+        if (!first && auto) { if (player.paused || player.ended) play(c); else queue.push(c); }
+      }
+      const kids = $('#live-list').children; while (kids.length > 100) kids[kids.length - 1].remove();
+    } else if (first) {
+      $('#live-list').innerHTML = '<div class="empty">No calls recorded yet. New calls appear here as they come in.</div>';
+    }
+    $('#live-status').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch (e) { $('#live-status').textContent = 'Connection problem, retrying…'; }
+}
+$('#auto').onclick = () => {
+  auto = !auto; queue = [];
+  $('#auto').classList.toggle('on', auto);
+  $('#auto').textContent = 'Auto-play new calls: ' + (auto ? 'on' : 'off');
+  if (auto) player.play().catch(() => {});  // user gesture unlocks audio
+};
+
+// ---- Archive
+let oldest = null;
+function dayMs(v, add) { if (!v) return null; const [y, m, d] = v.split('-').map(Number); return new Date(y, m - 1, d + add).getTime(); }
+async function loadArchive(reset) {
+  if (reset) { oldest = null; $('#arch-list').innerHTML = ''; }
+  const p = new URLSearchParams({limit: 50});
+  if ($('#f-channel').value) p.set('talkgroup', $('#f-channel').value);
+  const from = dayMs($('#f-from').value, 0), to = dayMs($('#f-to').value, 1);
+  if (from) p.set('start_after_ms', from);
+  if (to) p.set('start_before_ms', to);
+  if (oldest) p.set('before_id', oldest);
+  const calls = await api('/api/calls?' + p);
+  for (const c of calls) { $('#arch-list').append(el(c)); oldest = c.id; }
+  $('#more').hidden = calls.length < 50;
+  if (reset && !calls.length) $('#arch-list').innerHTML = '<div class="empty">No calls match.</div>';
+}
+async function loadChannels() {
+  const chans = await api('/api/channels');
+  const sel = $('#f-channel'), keep = sel.value;
+  sel.length = 1;
+  for (const c of chans) sel.append(new Option(`${c.tag || c.talkgroup} (${c.calls})`, c.talkgroup));
+  sel.value = keep;
+}
+$('#f-go').onclick = () => loadArchive(true);
+$('#more').onclick = () => loadArchive(false);
+
+// ---- Tabs
+function tab(name) {
+  $('#live').hidden = name !== 'live'; $('#archive').hidden = name !== 'archive';
+  $('#tab-live').classList.toggle('on', name === 'live'); $('#tab-archive').classList.toggle('on', name === 'archive');
+  if (name === 'archive') { loadChannels(); loadArchive(true); }
+}
+$('#tab-live').onclick = () => tab('live');
+$('#tab-archive').onclick = () => tab('archive');
+
+pollLive(true);
+setInterval(() => pollLive(false), 2000);
+</script>
+</body>
+</html>

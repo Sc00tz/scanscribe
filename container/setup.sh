@@ -55,13 +55,17 @@ log "Installing config (existing files in $CONF_DIR are kept)"
 [[ -f "$CONF_DIR/channels.master.csv" ]] || install -m 0644 "$APP_DIR/config/channels.master.csv" "$CONF_DIR/channels.master.csv"
 [[ -f "$CONF_DIR/scanscribe.env" ]]      || install -m 0644 "$APP_DIR/config/scanscribe.env" "$CONF_DIR/scanscribe.env"
 install -m 0644 "$APP_DIR/systemd/scanscribe-recorder.service" /etc/systemd/system/scanscribe-recorder.service
+install -m 0644 "$APP_DIR/systemd/scanscribe-web.service" /etc/systemd/system/scanscribe-web.service
 install -m 0755 "$APP_DIR/container/scanscribe-check" /usr/local/bin/scanscribe-check
+install -m 0755 "$APP_DIR/container/scanscribe-update" /usr/local/bin/scanscribe-update
 
 log "Generating Trunk Recorder config"
 python3 "$APP_DIR/container/generate_config.py"
 chown -R scanscribe:scanscribe "$DATA_DIR"
 
 systemctl daemon-reload
+systemctl enable scanscribe-web.service
+systemctl restart scanscribe-web.service   # web only; never touches the recorder
 if lsusb -d 0bda: >/dev/null 2>&1; then
   systemctl enable --now scanscribe-recorder.service
   echo "Recorder started."
@@ -71,4 +75,6 @@ else
   echo "Fix USB passthrough, then: systemctl start scanscribe-recorder"
 fi
 
+ip=$(hostname -I | awk '{print $1}')
+echo "Web interface: http://${ip}:8080"
 log "Done. Run 'scanscribe-check' for a dongle/recording status report."

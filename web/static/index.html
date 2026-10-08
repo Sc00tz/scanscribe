@@ -59,6 +59,36 @@
   .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   .banner { background: color-mix(in srgb, var(--fire) 18%, var(--panel)); border: 1px solid var(--fire); border-radius: 8px;
             padding: 10px 14px; margin-bottom: 16px; font-size: 14px; }
+  /* Scanner faceplate: fixed dark hardware look in both themes */
+  .scanner { background: linear-gradient(#262a30, #181a1e); border: 1px solid #343941; border-radius: 12px; padding: 14px;
+             box-shadow: inset 0 1px 0 #3d434c, 0 8px 22px rgba(0,0,0,.28); margin-bottom: 16px; color: #c9c2b4; }
+  .scanner-top { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; }
+  .lcd { flex: 1 1 320px; min-width: 0; background: #1a1105; border: 1px solid #000; border-radius: 6px; padding: 8px 14px 10px;
+         box-shadow: inset 0 0 22px #000, inset 0 0 0 2px #2b1e0b; color: #ffb23e; text-shadow: 0 0 7px rgba(255,178,62,.5);
+         font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+  .lcd-flags { display: flex; gap: 12px; font-size: 10px; letter-spacing: .08em; min-height: 13px; }
+  .lcd-flags span { opacity: .22; } .lcd-flags span.on { opacity: 1; }
+  .lcd-l1 { font-size: 22px; letter-spacing: .05em; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lcd-l2 { font-size: 13px; color: #d9962f; text-shadow: none; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 17px; }
+  .scanner-ctl { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+  .knob { background: #2c3037; color: #c9c2b4; border: 1px solid #424851; border-radius: 6px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+  .knob:hover { background: #343942; }
+  .keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; margin-top: 14px; }
+  .key { display: flex; flex-direction: column; align-items: stretch; gap: 5px; padding: 7px 6px 7px; cursor: pointer; min-width: 0;
+         background: linear-gradient(#32363e, #272a31); color: #c9c2b4; border: 1px solid #444a53; border-radius: 7px; font: inherit; text-align: center;
+         box-shadow: 0 2px 0 #0d0e10; }
+  .key:active { transform: translateY(1px); box-shadow: 0 1px 0 #0d0e10; }
+  .key .led { display: block; height: 9px; border-radius: 2px; background: #6b4510; box-shadow: inset 0 0 0 1px #000; transition: background .08s, box-shadow .08s; }
+  .key .num { font-size: 15px; font-weight: 600; line-height: 1; }
+  .key .nm { font-size: 11px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a9a294; }
+  .key.locked .led { background: #1c1813; } .key.locked .num, .key.locked .nm { opacity: .4; text-decoration: line-through; }
+  .key.scan .led { background: #ffb23e; box-shadow: inset 0 0 0 1px #000, 0 0 12px 2px rgba(255,178,62,.75); }
+  .key.hold .led { background: #fff0cc; box-shadow: inset 0 0 0 1px #000, 0 0 16px 4px rgba(255,200,110,.95); }
+  .key.ping .led { animation: ping .5s ease-in-out 5; }
+  @keyframes ping { 50% { background: #ffb23e; box-shadow: inset 0 0 0 1px #000, 0 0 10px 2px rgba(255,178,62,.7); } }
+  .key:focus-visible, .knob:focus-visible { outline: 2px solid #ffb23e; outline-offset: 2px; }
+  .scanner-note { margin-top: 10px; font-size: 12px; color: #8f897c; }
+  @media (prefers-reduced-motion: reduce) { .key .led { transition: none; } .key.ping .led { animation: none; background: #ffb23e; } }
   footer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
            padding: 10px 16px; display: flex; gap: 12px; align-items: center; }
   footer audio { flex: 1; min-width: 0; } #now { font-size: 13px; color: var(--dim); min-width: 120px; }
@@ -71,6 +101,21 @@
 </header>
 <main>
   <section id="live">
+    <div class="scanner" id="scanner" role="group" aria-label="Scanner channels">
+      <div class="scanner-top">
+        <div class="lcd" aria-live="polite">
+          <div class="lcd-flags"><span id="fl-auto">AUTO</span><span id="fl-lo">L/O</span><span id="fl-rx">RX</span></div>
+          <div class="lcd-l1" id="lcd1">Scanning</div>
+          <div class="lcd-l2" id="lcd2"></div>
+        </div>
+        <div class="scanner-ctl">
+          <button class="knob" id="ch-all">All channels on</button>
+          <button class="knob" id="ch-none">All channels off</button>
+        </div>
+      </div>
+      <div class="keys" id="keys"></div>
+      <div class="scanner-note" id="scanner-note">Select a channel to turn it off for the live feed and auto-play. Your choice is remembered in this browser.</div>
+    </div>
     <div class="bar">
       <button id="auto" class="btn">Auto-play new calls: off</button>
       <span class="meta" id="live-status"></span>
@@ -156,7 +201,7 @@
 <script>
 const $ = s => document.querySelector(s);
 const player = $('#player');
-let queue = [], auto = false, playingId = null;
+let queue = [], auto = false, playingId = null, currentCall = null;
 
 function cls(c) {
   const t = ((c.category || '') + ' ' + (c.grp || '') + ' ' + (c.tag || '')).toLowerCase();
@@ -180,6 +225,7 @@ function el(c, fresh) {
   const div = document.createElement('div');
   div.className = 'call ' + cls(c) + (fresh ? ' fresh' : '');
   div.dataset.id = c.id;
+  div.dataset.freq = c.freq;
   const mhz = c.freq ? (c.freq / 1e6).toFixed(4) + ' MHz' : '';
   const unit = c.src ? ' · unit ' + c.src : '';
   const enc = c.encrypted ? ' · ENCRYPTED' : '';
@@ -199,7 +245,7 @@ function el(c, fresh) {
   return div;
 }
 function play(c) {
-  playingId = c.id;
+  playingId = c.id; currentCall = c; holdOn(c);
   document.querySelectorAll('.call').forEach(n => n.classList.toggle('playing', +n.dataset.id === c.id));
   $('#now').textContent = (c.tag || 'TG ' + c.talkgroup) + ' ' + fmtTime(c.start_ms);
   player.src = '/audio/' + c.id;
@@ -221,8 +267,9 @@ async function pollLive(first) {
         const existing = list.querySelector('[data-id="' + c.id + '"]');
         if (existing) { setTx(existing, c); continue; }
         if (c.id <= lastId) continue;
-        list.prepend(el(c, !first));
-        if (!first && auto) { if (player.paused || player.ended) play(c); else queue.push(c); }
+        const row = el(c, !first); list.prepend(row);
+        const off = locked.has(c.freq); row.hidden = off;
+        if (!first && !off) { pingKey(c.freq); if (auto) { if (player.paused || player.ended) play(c); else queue.push(c); } }
       }
       lastId = Math.max(lastId, ...calls.map(c => c.id));
       const kids = list.children; while (kids.length > 100) kids[kids.length - 1].remove();
@@ -236,6 +283,7 @@ $('#auto').onclick = () => {
   auto = !auto; queue = [];
   $('#auto').classList.toggle('on', auto);
   $('#auto').textContent = 'Auto-play new calls: ' + (auto ? 'on' : 'off');
+  drawLcd();
   if (auto) player.play().catch(() => {});  // user gesture unlocks audio
 };
 
@@ -343,12 +391,91 @@ $('#apply').onclick = async () => {
   } catch (e) { $('#apply-msg').textContent = 'Failed: ' + e.message; }
 };
 
+// ---- Scanner panel
+let chans = [], locked = new Set(), holdFreq = null, scanPos = -1, holdTimer = null;
+try { locked = new Set(JSON.parse(localStorage.getItem('ss-locked') || '[]')); } catch (e) {}
+const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+function saveLocked() { try { localStorage.setItem('ss-locked', JSON.stringify([...locked])); } catch (e) {} }
+function keyEl(freq) { return document.querySelector('#keys .key[data-freq="' + freq + '"]'); }
+function renderKeys() {
+  const box = $('#keys'); box.innerHTML = '';
+  chans.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.className = 'key'; b.dataset.freq = c.freq_hz; b.type = 'button';
+    b.innerHTML = '<span class="led"></span><span class="num"></span><span class="nm"></span>';
+    b.querySelector('.num').textContent = i + 1;
+    b.querySelector('.nm').textContent = c.name;
+    b.title = c.name + ' · ' + (c.freq_hz / 1e6).toFixed(4) + ' MHz';
+    b.onclick = () => { locked.has(c.freq_hz) ? locked.delete(c.freq_hz) : locked.add(c.freq_hz); lockChanged(); };
+    box.append(b);
+  });
+  lockChanged();
+}
+function lockChanged() {
+  saveLocked();
+  document.querySelectorAll('#keys .key').forEach(k => {
+    const off = locked.has(+k.dataset.freq);
+    k.classList.toggle('locked', off); k.setAttribute('aria-pressed', String(!off));
+    k.setAttribute('aria-label', k.title + (off ? ', off for live feed' : ', on for live feed'));
+  });
+  document.querySelectorAll('#live-list .call').forEach(r => { r.hidden = locked.has(+r.dataset.freq); });
+  const n = chans.filter(c => locked.has(c.freq_hz)).length;
+  $('#fl-lo').textContent = n ? 'L/O ' + n : 'L/O'; $('#fl-lo').classList.toggle('on', n > 0);
+  drawLcd();
+}
+function activeChans() { return chans.filter(c => !locked.has(c.freq_hz)); }
+function drawLcd() {
+  $('#fl-auto').classList.toggle('on', auto);
+  $('#fl-rx').classList.toggle('on', holdFreq !== null);
+  if (holdFreq !== null) {
+    const i = chans.findIndex(c => c.freq_hz === holdFreq), c = i >= 0 ? chans[i] : null;
+    $('#lcd1').textContent = c ? 'CH' + String(i + 1).padStart(2, '0') + ' ' + c.name : (currentCall && currentCall.tag) || 'Receiving';
+    $('#lcd2').textContent = (holdFreq / 1e6).toFixed(4) + ' MHz' + (c && c.category ? '  ' + c.category : '');
+  } else if (!chans.length) {
+    $('#lcd1').textContent = 'No channels'; $('#lcd2').textContent = 'Add channels in Settings';
+  } else if (!activeChans().length) {
+    $('#lcd1').textContent = 'All channels off'; $('#lcd2').textContent = 'Turn a channel on to hear it live';
+  } else {
+    $('#lcd1').textContent = 'Scanning'; $('#lcd2').textContent = activeChans().length + ' of ' + chans.length + ' channels';
+  }
+}
+function setLeds() {
+  document.querySelectorAll('#keys .key').forEach(k => {
+    k.classList.toggle('hold', holdFreq !== null && +k.dataset.freq === holdFreq);
+    if (holdFreq !== null) k.classList.remove('scan');
+  });
+}
+function holdOn(c) { clearTimeout(holdTimer); holdFreq = c.freq; setLeds(); drawLcd(); }
+function holdOff() { holdFreq = null; setLeds(); drawLcd(); }
+function releaseSoon() { clearTimeout(holdTimer); holdTimer = setTimeout(() => { if (player.paused || player.ended) holdOff(); }, 900); }
+player.addEventListener('ended', releaseSoon); player.addEventListener('pause', releaseSoon);
+player.addEventListener('playing', () => { clearTimeout(holdTimer); if (currentCall) holdOn(currentCall); });
+function pingKey(freq) {
+  const k = keyEl(freq); if (!k) return;
+  k.classList.remove('ping'); void k.offsetWidth; k.classList.add('ping');
+  setTimeout(() => k.classList.remove('ping'), 2600);
+}
+function scanTick() {
+  if (holdFreq !== null || reduceMotion) return;
+  const act = activeChans(); const keys = document.querySelectorAll('#keys .key');
+  keys.forEach(k => k.classList.remove('scan'));
+  if (!act.length) return;
+  scanPos = (scanPos + 1) % act.length;
+  const k = keyEl(act[scanPos].freq_hz); if (k) k.classList.add('scan');
+}
+async function loadChannels() { try { chans = await api('/api/live-channels'); renderKeys(); } catch (e) {} }
+$('#ch-all').onclick = () => { locked.clear(); lockChanged(); };
+$('#ch-none').onclick = () => { chans.forEach(c => locked.add(c.freq_hz)); lockChanged(); };
+setInterval(scanTick, 160);
+loadChannels();
+
 // ---- Tabs
 function tab(name) {
   for (const t of ['live', 'archive', 'settings']) {
     $('#' + t).hidden = name !== t; $('#tab-' + t).classList.toggle('on', name === t);
   }
   if (name === 'settings') loadSettings().catch(() => {});
+  if (name === 'live') loadChannels();
   if (name === 'archive') { loadChannels(); loadArchive(true); }
 }
 $('#tab-live').onclick = () => tab('live');

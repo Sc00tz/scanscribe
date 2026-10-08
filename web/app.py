@@ -457,6 +457,20 @@ def read_master_rows():
         return rows
 
 
+def live_channels():
+    out = []
+    for r in read_master_rows():
+        if str(r.get("enabled", "")).strip().lower() != "true":
+            continue
+        try:
+            hz = int(round(float(r["freq_mhz"]) * 1_000_000))
+        except (KeyError, ValueError):
+            continue
+        out.append({"freq_hz": hz, "name": r.get("alpha_tag", ""), "description": r.get("description", ""),
+                    "category": r.get("category", ""), "mode": r.get("mode", "")})
+    return out
+
+
 def service_state(name):
     try:
         out = subprocess.run(["systemctl", "is-active", name], capture_output=True, text=True, timeout=5)
@@ -536,6 +550,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
             elif url.path == "/api/calls":
                 self.send_json(query_calls(q))
+            elif url.path == "/api/live-channels":
+                self.send_json(live_channels())
             elif url.path == "/api/settings":
                 self.send_json(get_settings())
             elif url.path == "/api/channels":

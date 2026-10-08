@@ -1,0 +1,20 @@
+[Unit]
+Description=ScanScribe transcription worker (faster-whisper, CPU)
+After=scanscribe-web.service
+
+[Service]
+Type=simple
+User=scanscribe
+Group=scanscribe
+EnvironmentFile=-/etc/scanscribe/scanscribe.env
+Environment=HF_HOME=/var/lib/scanscribe/hf
+Environment=DB_PATH=/var/lib/scanscribe/scanscribe.db
+WorkingDirectory=/opt/scanscribe/web
+ExecStart=/opt/scanscribe/venv/bin/python /opt/scanscribe/web/transcribe.py
+# Keep transcription from starving the recorder of CPU
+Nice=10
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

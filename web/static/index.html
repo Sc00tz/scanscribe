@@ -38,6 +38,8 @@
   .play { width: 38px; height: 38px; border-radius: 50%; border: 0; background: var(--accent); color: #fff;
           font-size: 14px; cursor: pointer; grid-row: span 2; }
   .tag { font-weight: 600; } .meta { color: var(--dim); font-size: 13px; }
+  .tx { grid-column: 2 / 4; font-size: 14px; margin-top: 2px; }
+  .tx.none { color: var(--dim); font-style: italic; }
   .time { color: var(--dim); font-size: 13px; text-align: right; }
   .empty { color: var(--dim); text-align: center; padding: 40px 0; }
   footer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
@@ -63,6 +65,7 @@
       <select id="f-channel"><option value="">All channels</option></select>
       <label class="meta">From <input type="date" id="f-from"></label>
       <label class="meta">To <input type="date" id="f-to"></label>
+      <input type="search" id="f-q" placeholder="Search transcripts">
       <button id="f-go" class="btn">Search</button>
     </div>
     <div id="arch-list"></div>
@@ -87,6 +90,12 @@ function fmtTime(ms) {
   return d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' +
          d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit', second: '2-digit'});
 }
+function setTx(div, c) {
+  const t = div.querySelector('.tx');
+  if (c.transcript) { t.textContent = c.transcript; t.className = 'tx'; }
+  else if (c.transcript === '') { t.textContent = '(no speech detected)'; t.className = 'tx none'; }
+  else { t.textContent = 'Transcribing…'; t.className = 'tx none'; }
+}
 function el(c, fresh) {
   const div = document.createElement('div');
   div.className = 'call ' + cls(c) + (fresh ? ' fresh' : '');
@@ -96,12 +105,14 @@ function el(c, fresh) {
   const enc = c.encrypted ? ' · ENCRYPTED' : '';
   div.innerHTML = '<button class="play" title="Play">▶</button>' +
     '<div><span class="tag"></span> <span class="meta"></span></div>' +
-    '<div class="time"></div><div class="meta sub"></div><div class="meta" style="text-align:right"></div>';
+    '<div class="time"></div><div class="meta sub"></div><div class="meta" style="text-align:right"></div>' +
+    '<div class="tx"></div>';
   div.querySelector('.tag').textContent = c.tag || ('TG ' + c.talkgroup);
   div.querySelector('.meta').textContent = '· ' + (c.description || '');
   div.querySelector('.time').textContent = fmtTime(c.start_ms);
   div.querySelector('.sub').textContent = mhz + unit + enc;
   div.children[4].textContent = ((c.length_ms || 0) / 1000).toFixed(1) + ' s';
+  setTx(div, c);
   div.querySelector('.play').onclick = () => play(c);
   return div;
 }
@@ -120,18 +131,21 @@ async function api(path) { const r = await fetch(path); if (!r.ok) throw new Err
 let lastId = 0;
 async function pollLive(first) {
   try {
-    const calls = await api('/api/calls?limit=' + (first ? 30 : 100) + (lastId ? '&after_id=' + lastId : ''));
+    const calls = await api('/api/calls?limit=50');
+    const list = $('#live-list');
     if (calls.length) {
-      lastId = Math.max(lastId, ...calls.map(c => c.id));
-      $('#live-list').querySelector('.empty')?.remove();
-      // newest-first from API; insert oldest first so newest ends on top
+      list.querySelector('.empty')?.remove();
       for (const c of calls.slice().reverse()) {
-        $('#live-list').prepend(el(c, !first));
+        const existing = list.querySelector('[data-id="' + c.id + '"]');
+        if (existing) { setTx(existing, c); continue; }
+        if (c.id <= lastId) continue;
+        list.prepend(el(c, !first));
         if (!first && auto) { if (player.paused || player.ended) play(c); else queue.push(c); }
       }
-      const kids = $('#live-list').children; while (kids.length > 100) kids[kids.length - 1].remove();
+      lastId = Math.max(lastId, ...calls.map(c => c.id));
+      const kids = list.children; while (kids.length > 100) kids[kids.length - 1].remove();
     } else if (first) {
-      $('#live-list').innerHTML = '<div class="empty">No calls recorded yet. New calls appear here as they come in.</div>';
+      list.innerHTML = '<div class="empty">No calls recorded yet. New calls appear here as they come in.</div>';
     }
     $('#live-status').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (e) { $('#live-status').textContent = 'Connection problem, retrying…'; }
@@ -153,6 +167,7 @@ async function loadArchive(reset) {
   const from = dayMs($('#f-from').value, 0), to = dayMs($('#f-to').value, 1);
   if (from) p.set('start_after_ms', from);
   if (to) p.set('start_before_ms', to);
+  if ($('#f-q').value.trim()) p.set('q', $('#f-q').value.trim());
   if (oldest) p.set('before_id', oldest);
   const calls = await api('/api/calls?' + p);
   for (const c of calls) { $('#arch-list').append(el(c)); oldest = c.id; }
@@ -167,6 +182,7 @@ async function loadChannels() {
   sel.value = keep;
 }
 $('#f-go').onclick = () => loadArchive(true);
+$('#f-q').addEventListener('keydown', e => { if (e.key === 'Enter') loadArchive(true); });
 $('#more').onclick = () => loadArchive(false);
 
 // ---- Tabs

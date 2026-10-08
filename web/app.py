@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS calls (
   tag TEXT, description TEXT, category TEXT, grp TEXT,
   start_ms INTEGER, length_ms INTEGER, src INTEGER,
   signal REAL, noise REAL, encrypted INTEGER, audio_type TEXT,
-  transcript TEXT
+  transcript TEXT,
+  transcribed_at INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS calls_start ON calls(start_ms);
 CREATE INDEX IF NOT EXISTS calls_tg ON calls(talkgroup, start_ms);
@@ -43,6 +45,11 @@ def init_db():
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     with connect() as con:
         con.executescript(SCHEMA)
+        cols = {r[1] for r in con.execute("PRAGMA table_info(calls)")}
+        if "transcribed_at" not in cols:  # upgrade a stage-2 database
+            con.execute("ALTER TABLE calls ADD COLUMN transcribed_at INTEGER")
+        if "attempts" not in cols:
+            con.execute("ALTER TABLE calls ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
         con.execute("PRAGMA journal_mode=WAL")
 
 
@@ -122,6 +129,11 @@ def query_calls(q):
         if v is not None:
             where.append(f"{col}{op}?")
             args.append(v)
+    text = (q.get("q") or [""])[0].strip()
+    if text:
+        esc = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        where.append("transcript LIKE ? ESCAPE '\\'")
+        args.append(f"%{esc}%")
     limit = min(max(int_arg(q, "limit") or 50, 1), 200)
     sql = "SELECT * FROM calls" + (" WHERE " + " AND ".join(where) if where else "")
     sql += " ORDER BY id DESC LIMIT ?"

@@ -4,7 +4,11 @@ echo "== USB devices (Realtek) =="
 lsusb -d 0bda: || echo "none found - USB passthrough problem"
 echo
 echo "== Tuner test =="
-timeout 8 rtl_test -t 2>&1 | head -15 || true
+if systemctl is-active --quiet scanscribe-recorder; then
+  echo "skipped: recorder is running and holds the dongle (that is good)"
+else
+  timeout 8 rtl_test -t 2>&1 | head -15 || true
+fi
 echo
 echo "== Service =="
 systemctl --no-pager status scanscribe-recorder | head -12

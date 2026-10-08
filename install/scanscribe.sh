@@ -64,6 +64,16 @@ else
   fi
 fi
 
+# Warn if a Proxmox VM already has an RTL-SDR passed through (it would hold the dongle)
+vm_hits=$(grep -H -E '^usb[0-9]+:.*0bda:(2838|2832)' /etc/pve/qemu-server/*.conf 2>/dev/null || true)
+if [[ -n $vm_hits ]]; then
+  echo
+  echo "WARNING: a VM has an RTL-SDR passed through. A running VM keeps the dongle, so the container cannot use it:"
+  echo "$vm_hits"
+  echo "Remove that usbN line from the VM (qm set <vmid> --delete usbN) if the VM doesn't need it."
+  confirm "Continue anyway?" || exit 1
+fi
+
 # ------------------------------------------------------------------- settings
 info "Container settings"
 next_id=$(pvesh get /cluster/nextid)
@@ -178,7 +188,7 @@ ct_addr=$(pct exec "$CTID" -- hostname -I 2>/dev/null | awk '{print $1}')
 cat <<DONE
 
 ScanScribe stage 1 is installed in container ${CTID} (${ct_addr:-IP unknown}).
-Check the dongle and recordings:   pct exec ${CTID} -- scanscribe-check
+Check the dongle and recordings:   pct exec ${CTID} -- /usr/local/bin/scanscribe-check
 Channel list to edit:              /etc/scanscribe/channels.master.csv (inside the container)
 Settings (gain/squelch/etc.):      /etc/scanscribe/scanscribe.env
 After editing:                     pct exec ${CTID} -- systemctl restart scanscribe-recorder

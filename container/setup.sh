@@ -69,12 +69,21 @@ install -m 0644 "$APP_DIR/systemd/scanscribe-web.service" /etc/systemd/system/sc
 install -m 0644 "$APP_DIR/systemd/scanscribe-transcribe.service" /etc/systemd/system/scanscribe-transcribe.service
 install -m 0755 "$APP_DIR/container/scanscribe-check" /usr/local/bin/scanscribe-check
 install -m 0755 "$APP_DIR/container/scanscribe-update" /usr/local/bin/scanscribe-update
+install -m 0755 "$APP_DIR/container/scanscribe-apply" /usr/local/bin/scanscribe-apply
+install -m 0644 "$APP_DIR/systemd/scanscribe-apply.path" /etc/systemd/system/scanscribe-apply.path
+install -m 0644 "$APP_DIR/systemd/scanscribe-apply.service" /etc/systemd/system/scanscribe-apply.service
 
 log "Generating Trunk Recorder config"
 python3 "$APP_DIR/container/generate_config.py"
 chown -R scanscribe:scanscribe "$DATA_DIR"
 
+# The web UI (user scanscribe) edits these two files; everything else in /etc/scanscribe stays root-owned
+chgrp scanscribe "$CONF_DIR" "$CONF_DIR/channels.master.csv" "$CONF_DIR/scanscribe.env"
+chmod 0775 "$CONF_DIR"
+chmod 0664 "$CONF_DIR/channels.master.csv" "$CONF_DIR/scanscribe.env"
+
 systemctl daemon-reload
+systemctl enable --now scanscribe-apply.path
 systemctl enable scanscribe-web.service
 systemctl restart scanscribe-web.service   # web only; never touches the recorder
 # Download the whisper model now so a failure shows up at install time, not later

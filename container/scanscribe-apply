@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Root helper, triggered by scanscribe-apply.path when the web UI writes the request file.
+# Only ever restarts the two whitelisted services.
+set -Eeuo pipefail
+flag=/var/lib/scanscribe/apply.flag
+[[ -f $flag ]] || exit 0
+req=$(cat "$flag")
+rm -f "$flag"
+for w in $req; do
+  case "$w" in
+    recorder)   systemctl restart scanscribe-recorder.service ;;
+    transcribe) systemctl restart scanscribe-transcribe.service ;;
+    *) echo "ignoring unknown request: $w" ;;
+  esac
+done

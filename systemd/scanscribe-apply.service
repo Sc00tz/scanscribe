@@ -1,0 +1,6 @@
+[Unit]
+Description=Apply ScanScribe settings (restart whitelisted services)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/scanscribe-apply

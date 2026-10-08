@@ -42,6 +42,23 @@
   .tx.none { color: var(--dim); font-style: italic; }
   .time { color: var(--dim); font-size: 13px; text-align: right; }
   .empty { color: var(--dim); text-align: center; padding: 40px 0; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; }
+  .panel h2 { font-size: 15px; margin: 0 0 4px; } .panel p { margin: 4px 0 10px; color: var(--dim); font-size: 13px; }
+  .chtable { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .chtable th { text-align: left; color: var(--dim); font-weight: 500; padding: 2px 4px; white-space: nowrap; }
+  .chtable td { padding: 3px 4px; } .chtable input, .chtable select { width: 100%; padding: 4px 6px; min-width: 0; }
+  .chtable td.c { text-align: center; }
+  .chtable select[data-f=mode] { min-width: 78px; } .chtable input[data-f=freq_mhz] { min-width: 80px; }
+  .chtable input[data-f=alpha_tag] { min-width: 130px; } .chtable input[data-f=description] { min-width: 210px; }
+  .chtable input[data-f=category], .chtable input[data-f=tag] { min-width: 120px; } .chtable input[data-f=tone], .chtable input[data-f=nac], .chtable input[data-f=squelch] { min-width: 64px; } .scroll { overflow-x: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 16px; }
+  .grid label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--dim); }
+  .msg { margin: 8px 0 0; font-size: 13px; } .msg.ok { color: #2ea043; } .msg.err { color: #e5534b; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; border: 1px solid var(--line); }
+  .pill.active { color: #2ea043; border-color: #2ea043; } .pill.bad { color: #e5534b; border-color: #e5534b; }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .banner { background: color-mix(in srgb, var(--fire) 18%, var(--panel)); border: 1px solid var(--fire); border-radius: 8px;
+            padding: 10px 14px; margin-bottom: 16px; font-size: 14px; }
   footer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
            padding: 10px 16px; display: flex; gap: 12px; align-items: center; }
   footer audio { flex: 1; min-width: 0; } #now { font-size: 13px; color: var(--dim); min-width: 120px; }
@@ -50,7 +67,7 @@
 <body>
 <header>
   <h1>ScanScribe</h1>
-  <nav><button id="tab-live" class="on">Live</button><button id="tab-archive">Archive</button></nav>
+  <nav><button id="tab-live" class="on">Live</button><button id="tab-archive">Archive</button><button id="tab-settings">Settings</button></nav>
 </header>
 <main>
   <section id="live">
@@ -70,6 +87,56 @@
     </div>
     <div id="arch-list"></div>
     <div class="bar" style="justify-content:center"><button id="more" class="btn" hidden>Load more</button></div>
+  </section>
+  <section id="settings" hidden>
+    <div class="banner" id="pending" hidden>
+      Saved changes are not active yet. Applying restarts the services below; the recorder is offline for a few
+      seconds and any call being recorded at that moment is lost.
+      <div class="bar" style="margin:8px 0 0">
+        <button class="btn primary" id="apply">Apply now</button><span class="meta" id="apply-msg"></span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Status</h2>
+      <span class="meta">Recorder</span> <span class="pill" id="st-recorder">…</span>
+      &nbsp; <span class="meta">Transcription</span> <span class="pill" id="st-transcribe">…</span>
+    </div>
+    <div class="panel">
+      <h2>Channels</h2>
+      <p>Everything the dongle listens to. One dongle covers roughly 1.9 MHz at once; channels outside that range are rejected on save.
+         Squelch is optional per channel (blank = use the default below). PL tone is optional; leave it blank unless you need it.</p>
+      <div class="scroll"><table class="chtable"><thead><tr>
+        <th>On</th><th>Mode</th><th>MHz</th><th>Name</th><th>Description</th><th>Category</th><th>Tag</th><th>PL tone</th><th>NAC</th><th>Squelch</th><th></th>
+      </tr></thead><tbody id="ch-body"></tbody></table></div>
+      <div class="bar" style="margin-top:10px">
+        <button class="btn" id="ch-add">Add channel</button>
+        <button class="btn primary" id="ch-save">Save channels</button>
+      </div>
+      <div class="msg" id="ch-msg"></div>
+    </div>
+    <div class="panel">
+      <h2>Receiver</h2>
+      <p>Gain and squelch decide what the dongle hears. Squelch: closer to 0 needs a stronger signal; more negative lets weaker signals through.</p>
+      <div class="grid">
+        <label>Tuner gain (dB)<input id="e-SDR_GAIN" inputmode="decimal"></label>
+        <label>Analog squelch (dB)<input id="e-ANALOG_SQUELCH" inputmode="numeric"></label>
+        <label>P25 squelch (dB)<input id="e-P25_SQUELCH" inputmode="numeric"></label>
+        <label>P25 modulation<select id="e-P25_MODULATION"><option>fsk4</option><option>qpsk</option></select></label>
+        <label>Discard calls shorter than (s)<input id="e-MIN_DURATION" inputmode="decimal"></label>
+      </div>
+      <div class="bar" style="margin-top:10px"><button class="btn primary" id="rx-save">Save receiver settings</button></div>
+      <div class="msg" id="rx-msg"></div>
+    </div>
+    <div class="panel">
+      <h2>Transcription</h2>
+      <p>Bigger models are more accurate but slower and use more memory. The model downloads the first time it is used.</p>
+      <div class="grid">
+        <label>Whisper model<select id="e-WHISPER_MODEL"><option>tiny.en</option><option>base.en</option><option>small.en</option><option>medium.en</option></select></label>
+        <label>CPU threads<input id="e-WHISPER_THREADS" inputmode="numeric"></label>
+      </div>
+      <div class="bar" style="margin-top:10px"><button class="btn primary" id="tx-save">Save transcription settings</button></div>
+      <div class="msg" id="tx-msg"></div>
+    </div>
   </section>
 </main>
 <footer><span id="now">Nothing playing</span><audio id="player" controls preload="none"></audio></footer>
@@ -185,14 +252,82 @@ $('#f-go').onclick = () => loadArchive(true);
 $('#f-q').addEventListener('keydown', e => { if (e.key === 'Enter') loadArchive(true); });
 $('#more').onclick = () => loadArchive(false);
 
+
+// ---- Settings
+let pendingApply = new Set();
+function msg(id, text, ok) { const m = $(id); m.textContent = text; m.className = 'msg ' + (ok ? 'ok' : 'err'); }
+function markPending(what) { what.forEach(w => pendingApply.add(w)); $('#pending').hidden = false; }
+async function post(path, body) {
+  const r = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+const CH_FIELDS = ['mode', 'freq_mhz', 'alpha_tag', 'description', 'category', 'tag', 'tone', 'nac', 'squelch'];
+function chRow(r) {
+  const tr = document.createElement('tr');
+  const cell = (node, c) => { const td = document.createElement('td'); if (c) td.className = 'c'; td.append(node); tr.append(td); return node; };
+  const on = document.createElement('input'); on.type = 'checkbox'; on.checked = String(r.enabled).toLowerCase() === 'true'; on.dataset.f = 'enabled';
+  cell(on, true);
+  for (const f of CH_FIELDS) {
+    let n;
+    if (f === 'mode') { n = document.createElement('select'); for (const o of ['analog', 'p25']) n.append(new Option(o, o)); n.value = r.mode || 'analog'; }
+    else { n = document.createElement('input'); n.value = r[f] || ''; if (f === 'freq_mhz') n.inputMode = 'decimal'; }
+    n.dataset.f = f; cell(n);
+  }
+  const del = document.createElement('button'); del.className = 'btn'; del.textContent = '✕'; del.title = 'Remove';
+  del.onclick = () => tr.remove(); cell(del);
+  return tr;
+}
+function readChannels() {
+  return [...document.querySelectorAll('#ch-body tr')].map(tr => {
+    const o = {};
+    tr.querySelectorAll('[data-f]').forEach(n => { o[n.dataset.f] = n.type === 'checkbox' ? n.checked : n.value; });
+    return o;
+  });
+}
+function setStatus(id, v) { const p = $(id); p.textContent = v; p.className = 'pill ' + (v === 'active' ? 'active' : 'bad'); }
+async function loadSettings() {
+  const d = await api('/api/settings');
+  const body = $('#ch-body'); body.innerHTML = '';
+  d.channels.forEach(r => body.append(chRow(r)));
+  for (const [k, v] of Object.entries(d.env)) { const n = $('#e-' + k); if (n) n.value = v; }
+  setStatus('#st-recorder', d.status.recorder); setStatus('#st-transcribe', d.status.transcribe);
+}
+$('#ch-add').onclick = () => $('#ch-body').append(chRow({enabled: 'true', mode: 'analog'}));
+$('#ch-save').onclick = async () => {
+  try {
+    const r = await post('/api/settings/channels', {channels: readChannels()});
+    if (r.ok) { msg('#ch-msg', 'Saved. ' + r.summary, true); markPending(['recorder']); } else msg('#ch-msg', r.error, false);
+  } catch (e) { msg('#ch-msg', 'Save failed: ' + e.message, false); }
+};
+async function saveEnv(keys, out, what) {
+  const values = {}; keys.forEach(k => values[k] = $('#e-' + k).value);
+  try {
+    const r = await post('/api/settings/env', {values});
+    if (r.ok) { msg(out, 'Saved.', true); markPending(what); } else msg(out, r.error, false);
+  } catch (e) { msg(out, 'Save failed: ' + e.message, false); }
+}
+$('#rx-save').onclick = () => saveEnv(['SDR_GAIN', 'ANALOG_SQUELCH', 'P25_SQUELCH', 'P25_MODULATION', 'MIN_DURATION'], '#rx-msg', ['recorder']);
+$('#tx-save').onclick = () => saveEnv(['WHISPER_MODEL', 'WHISPER_THREADS'], '#tx-msg', ['transcribe']);
+$('#apply').onclick = async () => {
+  try {
+    const r = await post('/api/apply', {what: [...pendingApply]});
+    if (r.ok) { pendingApply.clear(); $('#apply-msg').textContent = 'Restarting…'; setTimeout(() => { $('#pending').hidden = true; $('#apply-msg').textContent = ''; loadSettings(); }, 6000); }
+    else $('#apply-msg').textContent = r.error;
+  } catch (e) { $('#apply-msg').textContent = 'Failed: ' + e.message; }
+};
+
 // ---- Tabs
 function tab(name) {
-  $('#live').hidden = name !== 'live'; $('#archive').hidden = name !== 'archive';
-  $('#tab-live').classList.toggle('on', name === 'live'); $('#tab-archive').classList.toggle('on', name === 'archive');
+  for (const t of ['live', 'archive', 'settings']) {
+    $('#' + t).hidden = name !== t; $('#tab-' + t).classList.toggle('on', name === t);
+  }
+  if (name === 'settings') loadSettings().catch(() => {});
   if (name === 'archive') { loadChannels(); loadArchive(true); }
 }
 $('#tab-live').onclick = () => tab('live');
 $('#tab-archive').onclick = () => tab('archive');
+$('#tab-settings').onclick = () => tab('settings');
 
 pollLive(true);
 setInterval(() => pollLive(false), 2000);

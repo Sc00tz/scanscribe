@@ -1,8 +1,14 @@
 """ScanScribe web: indexes Trunk Recorder call logs into SQLite and serves a live feed + archive.
 Standard library only (no pip/apt web framework needed)."""
+import csv
+import importlib.util
+import io
 import json
 import os
+import re
 import sqlite3
+import subprocess
+import tempfile
 import threading
 import time
 from http import HTTPStatus
@@ -16,6 +22,11 @@ CAPTURE_DIR = Path(os.environ.get("CAPTURE_DIR", "/var/lib/scanscribe/recordings
 DB_PATH = os.environ.get("DB_PATH", "/var/lib/scanscribe/scanscribe.db")
 STATIC_DIR = Path(__file__).parent / "static"
 SCAN_INTERVAL = float(os.environ.get("SCAN_INTERVAL", "2"))
+MASTER_PATH = Path(os.environ.get("MASTER_PATH", "/etc/scanscribe/channels.master.csv"))
+ENV_PATH = Path(os.environ.get("ENV_PATH", "/etc/scanscribe/scanscribe.env"))
+APPLY_FLAG = Path(os.environ.get("APPLY_FLAG", "/var/lib/scanscribe/apply.flag"))
+GEN_PATH = Path(os.environ.get(
+    "GEN_PATH", str(Path(__file__).resolve().parent.parent / "container" / "generate_config.py")))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS calls (
@@ -150,6 +161,233 @@ def query_channels():
         return [dict(r) for r in rows]
 
 
+# ------------------------------------------------------------------ settings
+MASTER_COLUMNS = ["enabled", "mode", "freq_mhz", "alpha_tag", "description", "category",
+                  "tag", "tone", "nac", "squelch"]
+MAX_CHANNELS = 100
+
+
+class SettingsError(ValueError):
+    pass
+
+
+def load_gen():
+    spec = importlib.util.spec_from_file_location("scanscribe_generate_config", GEN_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def clean_text(v, name, required=False, maxlen=80):
+    v = "" if v is None else str(v).strip()
+    if any(ord(ch) < 32 for ch in v):
+        raise SettingsError(f"{name}: control characters are not allowed")
+    if required and not v:
+        raise SettingsError(f"{name} is required")
+    if len(v) > maxlen:
+        raise SettingsError(f"{name} is too long (max {maxlen})")
+    return v
+
+
+def clean_number(v, name, lo, hi, integer=False, allow_blank=False):
+    v = "" if v is None else str(v).strip()
+    if v == "":
+        if allow_blank:
+            return ""
+        raise SettingsError(f"{name} is required")
+    try:
+        n = float(v)
+    except ValueError:
+        raise SettingsError(f"{name} must be a number")
+    if not (lo <= n <= hi):
+        raise SettingsError(f"{name} must be between {lo} and {hi}")
+    if integer:
+        if n != int(n):
+            raise SettingsError(f"{name} must be a whole number")
+        return str(int(n))
+    return v
+
+
+def clean_channels(rows):
+    if not isinstance(rows, list) or not rows:
+        raise SettingsError("The channel list is empty")
+    if len(rows) > MAX_CHANNELS:
+        raise SettingsError(f"Too many channels (max {MAX_CHANNELS})")
+    out = []
+    for i, r in enumerate(rows, 1):
+        if not isinstance(r, dict):
+            raise SettingsError(f"Row {i}: bad format")
+        label = (str(r.get("alpha_tag") or "").strip() or f"row {i}")
+        try:
+            mode = str(r.get("mode", "")).strip().lower()
+            if mode not in ("analog", "p25"):
+                raise SettingsError("mode must be analog or p25")
+            out.append({
+                "enabled": "true" if r.get("enabled") in (True, "true", "True", "1", 1) else "false",
+                "mode": mode,
+                "freq_mhz": clean_number(r.get("freq_mhz"), "frequency (MHz)", 30, 1000),
+                "alpha_tag": clean_text(r.get("alpha_tag"), "name", required=True, maxlen=32),
+                "description": clean_text(r.get("description"), "description"),
+                "category": clean_text(r.get("category"), "category"),
+                "tag": clean_text(r.get("tag"), "tag"),
+                "tone": clean_number(r.get("tone"), "PL tone", 60, 260, allow_blank=True),
+                "nac": clean_text(r.get("nac"), "NAC", maxlen=8),
+                "squelch": clean_number(r.get("squelch"), "squelch", -120, 0, integer=True, allow_blank=True),
+            })
+        except SettingsError as exc:
+            raise SettingsError(f"{label}: {exc}")
+    return out
+
+
+def channels_to_csv(rows):
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=MASTER_COLUMNS, lineterminator="\n")
+    w.writeheader()
+    for r in rows:
+        w.writerow(r)
+    return buf.getvalue()
+
+
+def atomic_write(path, text):
+    """Write via temp file + rename; keep one .bak of the previous version."""
+    path = Path(path)
+    if path.exists():
+        try:
+            (path.parent / (path.name + ".bak")).write_bytes(path.read_bytes())
+        except OSError:
+            pass
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(tmp, 0o664)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def validate_generation(master_text, env_text):
+    """Run the real config generator on candidate files in a temp dir. Returns summary."""
+    gen = load_gen()
+    with tempfile.TemporaryDirectory() as td:
+        m, e = os.path.join(td, "m.csv"), os.path.join(td, "e.env")
+        Path(m).write_text(master_text, encoding="utf-8")
+        Path(e).write_text(env_text, encoding="utf-8")
+        try:
+            return gen.build(m, e, os.path.join(td, "out"))
+        except gen.ConfigError as exc:
+            raise SettingsError(str(exc))
+        except (ValueError, KeyError) as exc:
+            raise SettingsError(f"Invalid settings: {exc}")
+
+
+def clean_choice(v, options, name):
+    if v not in options:
+        raise SettingsError(f"{name} must be one of: {', '.join(options)}")
+    return v
+
+
+ENV_FIELDS = {
+    "SDR_GAIN": lambda v: clean_number(v, "gain", 0, 50),
+    "ANALOG_SQUELCH": lambda v: clean_number(v, "analog squelch", -120, 0, integer=True),
+    "P25_SQUELCH": lambda v: clean_number(v, "P25 squelch", -120, 0, integer=True),
+    "P25_MODULATION": lambda v: clean_choice(v, ("fsk4", "qpsk"), "P25 modulation"),
+    "MIN_DURATION": lambda v: clean_number(v, "minimum call length", 0, 30),
+    "WHISPER_MODEL": lambda v: clean_choice(v, ("tiny.en", "base.en", "small.en", "medium.en"), "whisper model"),
+    "WHISPER_THREADS": lambda v: clean_number(v, "whisper threads", 1, 16, integer=True),
+}
+
+
+def read_env_text():
+    return ENV_PATH.read_text(encoding="utf-8") if ENV_PATH.exists() else ""
+
+
+def env_values():
+    vals = {}
+    for line in read_env_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            vals[k.strip()] = v.strip()
+    return vals
+
+
+def merged_env(changes):
+    text = read_env_text()
+    lines = text.splitlines()
+    for key, val in changes.items():
+        pat = re.compile(rf"^{re.escape(key)}=")
+        for idx, line in enumerate(lines):
+            if pat.match(line):
+                lines[idx] = f"{key}={val}"
+                break
+        else:
+            lines.append(f"{key}={val}")
+    return "\n".join(lines) + "\n"
+
+
+def read_master_rows():
+    if not MASTER_PATH.exists():
+        return []
+    with open(MASTER_PATH, newline="", encoding="utf-8") as fh:
+        rows = []
+        for r in csv.DictReader(fh):
+            rows.append({k: (r.get(k) or "") for k in MASTER_COLUMNS})
+        return rows
+
+
+def service_state(name):
+    try:
+        out = subprocess.run(["systemctl", "is-active", name], capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def get_settings():
+    env = env_values()
+    return {
+        "channels": read_master_rows(),
+        "env": {k: env.get(k, "") for k in ENV_FIELDS},
+        "status": {"recorder": service_state("scanscribe-recorder"),
+                   "transcribe": service_state("scanscribe-transcribe")},
+    }
+
+
+def save_channels(rows):
+    clean = clean_channels(rows)
+    text = channels_to_csv(clean)
+    summary = validate_generation(text, read_env_text())
+    atomic_write(MASTER_PATH, text)
+    return summary
+
+
+def save_env(values):
+    if not isinstance(values, dict):
+        raise SettingsError("bad format")
+    changes = {}
+    for key, val in values.items():
+        if key not in ENV_FIELDS:
+            raise SettingsError(f"Unknown setting {key}")
+        changes[key] = ENV_FIELDS[key](str(val).strip())
+    text = merged_env(changes)
+    master = MASTER_PATH.read_text(encoding="utf-8") if MASTER_PATH.exists() else ""
+    summary = validate_generation(master, text)
+    atomic_write(ENV_PATH, text)
+    return summary
+
+
+def request_apply(what):
+    allowed = {"recorder", "transcribe"}
+    if not isinstance(what, list) or not what or not set(what) <= allowed:
+        raise SettingsError("Nothing valid to apply")
+    APPLY_FLAG.write_text(" ".join(sorted(set(what))) + "\n")
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ScanScribe"
 
@@ -179,6 +417,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
             elif url.path == "/api/calls":
                 self.send_json(query_calls(q))
+            elif url.path == "/api/settings":
+                self.send_json(get_settings())
             elif url.path == "/api/channels":
                 self.send_json(query_channels())
             elif url.path.startswith("/audio/"):
@@ -187,6 +427,42 @@ class Handler(BaseHTTPRequestHandler):
                 self.fail(404)
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def do_POST(self):
+        url = urlparse(self.path)
+        # CSRF guard: JSON bodies only, and any Origin must match this server's Host
+        origin = self.headers.get("Origin")
+        if origin and urlparse(origin).netloc != self.headers.get("Host"):
+            return self.fail(403)
+        if "application/json" not in (self.headers.get("Content-Type") or ""):
+            return self.fail(415)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self.fail(400)
+        if n <= 0 or n > 262144:
+            return self.fail(413)
+        try:
+            body = json.loads(self.rfile.read(n))
+        except ValueError:
+            return self.fail(400)
+        try:
+            if url.path == "/api/settings/channels":
+                summary = save_channels(body.get("channels"))
+                result = {"ok": True, "summary": summary}
+            elif url.path == "/api/settings/env":
+                summary = save_env(body.get("values"))
+                result = {"ok": True, "summary": summary}
+            elif url.path == "/api/apply":
+                request_apply(body.get("what"))
+                result = {"ok": True}
+            else:
+                return self.fail(404)
+        except SettingsError as exc:
+            result = {"ok": False, "error": str(exc)}
+        except OSError as exc:
+            result = {"ok": False, "error": f"Could not write: {exc.strerror or exc}"}
+        self.send_json(result)
 
     def send_audio(self, id_text):
         if not id_text.isdigit():

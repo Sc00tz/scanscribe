@@ -14,6 +14,11 @@ import json
 import os
 import sys
 
+
+class ConfigError(ValueError):
+    """Invalid channel list or settings."""
+
+
 DEFAULTS = {
     "SDR_DEVICE": "rtl=0",
     "SDR_RATE": "2400000",
@@ -55,13 +60,13 @@ def load_channels(path):
                 continue
             mode = row["mode"].strip().lower()
             if mode not in ("analog", "p25"):
-                sys.exit(f"Bad mode {mode!r} for {row.get('alpha_tag')}; use analog or p25")
+                raise ConfigError(f"Bad mode {mode!r} for {row.get('alpha_tag')}; use analog or p25")
             hz = int(round(float(row["freq_mhz"]) * 1_000_000))
             row["_hz"] = hz
             row["_mode"] = mode
             chans.append(row)
     if not chans:
-        sys.exit("No enabled channels in master list")
+        raise ConfigError("No enabled channels in master list")
     return chans
 
 
@@ -84,7 +89,7 @@ def pick_center(freqs, rate, guard=30_000):
     usable = int(rate * 0.4)  # +/- 40% of the sample rate is clean passband
     worst = max(abs(f - best) for f in freqs)
     if worst > usable:
-        sys.exit(
+        raise ConfigError(
             f"Channels span too wide for one dongle at {rate} S/s: farthest channel is "
             f"{worst/1e6:.3f} MHz from centre, usable is +/-{usable/1e6:.3f} MHz. "
             "Disable some channels or raise SDR_RATE."
@@ -108,26 +113,23 @@ def write_channel_file(path, chans, used_ids):
                         "", "", (c.get("squelch") or "").strip()])
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--master", default="/etc/scanscribe/channels.master.csv")
-    ap.add_argument("--env", default="/etc/scanscribe/scanscribe.env")
-    ap.add_argument("--outdir", default="/var/lib/scanscribe/tr")
-    args = ap.parse_args()
+def build(master, env, outdir):
+    """Generate Trunk Recorder files in outdir; returns a one-line summary. Raises ConfigError."""
+    return _build(load_env(env), load_channels(master), outdir)
 
-    cfg = load_env(args.env)
-    chans = load_channels(args.master)
+
+def _build(cfg, chans, outdir):
     rate = int(cfg["SDR_RATE"])
     center, worst = pick_center([c["_hz"] for c in chans], rate)
 
-    os.makedirs(args.outdir, exist_ok=True)
+    os.makedirs(outdir, exist_ok=True)
     used = set()
     analog = [c for c in chans if c["_mode"] == "analog"]
     p25 = [c for c in chans if c["_mode"] == "p25"]
 
     systems = []
     if analog:
-        write_channel_file(os.path.join(args.outdir, "analog_channels.csv"), analog, used)
+        write_channel_file(os.path.join(outdir, "analog_channels.csv"), analog, used)
         systems.append({
             "type": "conventional", "shortName": "analog",
             "channelFile": "analog_channels.csv",
@@ -136,7 +138,7 @@ def main():
             "minDuration": float(cfg["MIN_DURATION"]),
         })
     if p25:
-        write_channel_file(os.path.join(args.outdir, "p25_channels.csv"), p25, used)
+        write_channel_file(os.path.join(outdir, "p25_channels.csv"), p25, used)
         systems.append({
             "type": "conventionalP25", "shortName": "p25",
             "channelFile": "p25_channels.csv",
@@ -157,13 +159,25 @@ def main():
         "ver": 2, "captureDir": cfg["CAPTURE_DIR"], "logLevel": cfg["LOG_LEVEL"],
         "callTimeout": 3, "sources": [source], "systems": systems,
     }
-    with open(os.path.join(args.outdir, "config.json"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(outdir, "config.json"), "w", encoding="utf-8") as fh:
         json.dump(config, fh, indent=2)
         fh.write("\n")
 
-    print(f"{len(chans)} channels ({len(analog)} analog, {len(p25)} P25); "
+    return (f"{len(chans)} channels ({len(analog)} analog, {len(p25)} P25); "
           f"centre {center/1e6:.4f} MHz, rate {rate/1e6:.2f} MS/s, "
           f"farthest channel {worst/1e6:.3f} MHz from centre")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--master", default="/etc/scanscribe/channels.master.csv")
+    ap.add_argument("--env", default="/etc/scanscribe/scanscribe.env")
+    ap.add_argument("--outdir", default="/var/lib/scanscribe/tr")
+    args = ap.parse_args()
+    try:
+        print(build(args.master, args.env, args.outdir))
+    except ConfigError as exc:
+        sys.exit(f"Config error: {exc}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for ScanScribe settings apply requests
+
+[Path]
+PathChanged=/var/lib/scanscribe/apply.flag
+Unit=scanscribe-apply.service
+
+[Install]
+WantedBy=multi-user.target

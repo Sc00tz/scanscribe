@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS calls (
   attempts INTEGER NOT NULL DEFAULT 0,
   audio_deleted INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS units (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS calls_start ON calls(start_ms);
 CREATE INDEX IF NOT EXISTS calls_tg ON calls(talkgroup, start_ms);
 """
@@ -64,6 +65,9 @@ def init_db():
             con.execute("ALTER TABLE calls ADD COLUMN audio_deleted INTEGER NOT NULL DEFAULT 0")
         if "attempts" not in cols:
             con.execute("ALTER TABLE calls ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+        for col, ddl in (("emergency", "INTEGER NOT NULL DEFAULT 0"), ("units", "TEXT"), ("err_pct", "INTEGER")):
+            if col not in cols:
+                con.execute(f"ALTER TABLE calls ADD COLUMN {col} {ddl}")
         con.execute("PRAGMA journal_mode=WAL")
 
 
@@ -73,6 +77,40 @@ def audio_for(json_path: Path) -> Optional[Path]:
         if p.exists():
             return p
     return None
+
+
+def call_extras(d: dict):
+    """(emergency, units JSON, err_pct) from a Trunk Recorder call JSON."""
+    src_list = d.get("srcList") or []
+    units = []
+    for s in src_list:
+        u = s.get("src")
+        if isinstance(u, int) and u > 0 and u not in units:
+            units.append(u)
+    emergency = 1 if d.get("emergency") or any(s.get("emergency") for s in src_list) else 0
+    total = bad = 0.0
+    for seg in d.get("freqList") or []:
+        try:
+            ln = float(seg.get("len") or 0)
+            total += ln
+            if seg.get("error_count"):
+                bad += ln
+        except (TypeError, ValueError):
+            pass
+    err_pct = round(100 * bad / total) if total > 0 and d.get("audio_type") == "digital" else None
+    return emergency, json.dumps(units), err_pct
+
+
+def backfill_extras(con):
+    """Fill the new detail columns for calls indexed before they existed."""
+    rows = con.execute("SELECT id, json_path FROM calls WHERE units IS NULL").fetchall()
+    for r in rows:
+        try:
+            d = json.loads((CAPTURE_DIR / r["json_path"]).read_text())
+        except (OSError, ValueError):
+            d = {}
+        con.execute("UPDATE calls SET emergency=?, units=?, err_pct=? WHERE id=?", (*call_extras(d), r["id"]))
+    con.commit()
 
 
 def ingest_once(con) -> int:
@@ -97,15 +135,17 @@ def ingest_once(con) -> int:
         con.execute(
             """INSERT OR IGNORE INTO calls
             (json_path, audio_path, system, freq, talkgroup, tag, description, category, grp,
-             start_ms, length_ms, src, signal, noise, encrypted, audio_type)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             start_ms, length_ms, src, signal, noise, encrypted, audio_type,
+             emergency, units, err_pct)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (rel, str(audio.relative_to(CAPTURE_DIR)), d.get("short_name"), d.get("freq"),
              d.get("talkgroup"), d.get("talkgroup_tag"), d.get("talkgroup_description"),
              d.get("talkgroup_group"), d.get("talkgroup_group_tag"),
              d.get("start_time_ms") or int(d.get("start_time", 0)) * 1000,
              d.get("call_length_ms") or int(d.get("call_length", 0)) * 1000,
              src_list[0].get("src") if src_list else None,
-             d.get("signal"), d.get("noise"), d.get("encrypted", 0), d.get("audio_type")),
+             d.get("signal"), d.get("noise"), d.get("encrypted", 0), d.get("audio_type"),
+             *call_extras(d)),
         )
         added += 1
     con.commit()
@@ -113,6 +153,11 @@ def ingest_once(con) -> int:
 
 
 def ingest_loop():
+    try:
+        with connect() as con:
+            backfill_extras(con)
+    except Exception as exc:
+        print(f"backfill error: {exc}", flush=True)
     while True:
         try:
             with connect() as con:
@@ -123,7 +168,8 @@ def ingest_loop():
 
 
 PUBLIC = ("id", "system", "freq", "talkgroup", "tag", "description", "category", "grp",
-          "start_ms", "length_ms", "src", "signal", "noise", "encrypted", "audio_type", "transcript", "audio_deleted")
+          "start_ms", "length_ms", "src", "signal", "noise", "encrypted", "audio_type", "transcript", "audio_deleted",
+          "emergency", "units", "err_pct")
 MIME = {".m4a": "audio/mp4", ".wav": "audio/wav"}
 
 
@@ -152,7 +198,34 @@ def query_calls(q):
     sql = "SELECT * FROM calls" + (" WHERE " + " AND ".join(where) if where else "")
     sql += " ORDER BY id DESC LIMIT ?"
     with connect() as con:
-        return [{k: r[k] for k in PUBLIC} for r in con.execute(sql, args + [limit])]
+        out = []
+        for r in con.execute(sql, args + [limit]):
+            row = {k: r[k] for k in PUBLIC}
+            try:
+                row["units"] = json.loads(row["units"] or "[]")
+            except ValueError:
+                row["units"] = []
+            out.append(row)
+        return out
+
+
+def get_units():
+    with connect() as con:
+        return {str(r["id"]): r["name"] for r in con.execute("SELECT id, name FROM units")}
+
+
+def set_unit(uid, name):
+    if isinstance(uid, bool) or not isinstance(uid, int) or uid <= 0:
+        raise SettingsError("Radio ID must be a positive number.")
+    name = " ".join(str(name or "").split())
+    if len(name) > 40:
+        raise SettingsError("Names can be up to 40 characters.")
+    with connect() as con:
+        if name:
+            con.execute("INSERT INTO units (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name", (uid, name))
+        else:
+            con.execute("DELETE FROM units WHERE id=?", (uid,))
+        con.commit()
 
 
 def query_channels():
@@ -552,6 +625,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(query_calls(q))
             elif url.path == "/api/live-channels":
                 self.send_json(live_channels())
+            elif url.path == "/api/units":
+                self.send_json(get_units())
             elif url.path == "/api/settings":
                 self.send_json(get_settings())
             elif url.path == "/api/channels":
@@ -588,6 +663,9 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/settings/env":
                 summary = save_env(body.get("values"))
                 result = {"ok": True, "summary": summary}
+            elif url.path == "/api/units":
+                set_unit(body.get("id"), body.get("name"))
+                result = {"ok": True}
             elif url.path == "/api/apply":
                 request_apply(body.get("what"))
                 result = {"ok": True}

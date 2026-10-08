@@ -32,6 +32,12 @@
           border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
   .call.fire { border-left-color: var(--fire); } .call.ems { border-left-color: var(--ems); }
   .call.law { border-left-color: var(--law); }
+  .call.emergency { border-color: #d33; border-left-color: #d33; background: color-mix(in srgb, #d33 10%, var(--panel)); }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-right: 6px; }
+  .badge.emg { background: #d33; color: #fff; } .badge.enc { background: #8a6d00; color: #fff; }
+  .unit { background: none; border: 0; border-bottom: 1px dotted var(--dim); color: inherit; font: inherit;
+          padding: 0; margin-right: 8px; cursor: pointer; }
+  .unit:hover, .unit:focus-visible { color: var(--accent); border-bottom-color: var(--accent); }
   .call.playing { outline: 2px solid var(--accent); }
   .call.fresh { animation: flash 2s ease-out; }
   @keyframes flash { from { background: color-mix(in srgb, var(--accent) 25%, var(--panel)); } }
@@ -221,14 +227,45 @@ function setTx(div, c) {
   else if (c.transcript === '') { t.textContent = '(no speech detected)'; t.className = 'tx none'; }
   else { t.textContent = 'Transcribing…'; t.className = 'tx none'; }
 }
+let unitNames = {};
+async function loadUnits() { try { unitNames = await api('/api/units'); } catch (e) {} paintUnits(); }
+function unitLabel(u) { return unitNames[u] || ('unit ' + u); }
+function paintUnits() { document.querySelectorAll('.unit').forEach(b => { b.textContent = unitLabel(b.dataset.u); }); }
+async function renameUnit(u) {
+  const name = prompt('Name for radio ' + u + ' (leave empty to remove the name):', unitNames[u] || '');
+  if (name === null) return;
+  try {
+    const r = await fetch('/api/units', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                         body: JSON.stringify({id: +u, name})});
+    const j = await r.json();
+    if (!j.ok) { alert(j.error); return; }
+  } catch (e) { alert('Could not save the name.'); return; }
+  loadUnits();
+}
+function fillSub(box, c, mhz) {
+  box.textContent = '';
+  const add = (cls, t) => { const b = document.createElement('span'); b.className = 'badge ' + cls; b.textContent = t; box.append(b); };
+  if (c.emergency) add('emg', 'EMERGENCY');
+  if (c.encrypted) add('enc', 'ENCRYPTED');
+  box.append(mhz);
+  (c.units || []).forEach(u => {
+    box.append(' · ');
+    const b = document.createElement('button');
+    b.className = 'unit'; b.dataset.u = u; b.title = 'Click to name this radio';
+    b.textContent = unitLabel(u); b.onclick = () => renameUnit(u);
+    box.append(b);
+  });
+  const extra = [];
+  if (c.err_pct >= 20) extra.push('weak signal, ' + c.err_pct + '% of audio had errors');
+  if (c.audio_deleted) extra.push('audio deleted');
+  if (extra.length) box.append(' · ' + extra.join(' · '));
+}
 function el(c, fresh) {
   const div = document.createElement('div');
   div.className = 'call ' + cls(c) + (fresh ? ' fresh' : '');
   div.dataset.id = c.id;
   div.dataset.freq = c.freq;
   const mhz = c.freq ? (c.freq / 1e6).toFixed(4) + ' MHz' : '';
-  const unit = c.src ? ' · unit ' + c.src : '';
-  const enc = c.encrypted ? ' · ENCRYPTED' : '';
   div.innerHTML = '<button class="play" title="Play">▶</button>' +
     '<div><span class="tag"></span> <span class="meta"></span></div>' +
     '<div class="time"></div><div class="meta sub"></div><div class="meta" style="text-align:right"></div>' +
@@ -236,7 +273,8 @@ function el(c, fresh) {
   div.querySelector('.tag').textContent = c.tag || ('TG ' + c.talkgroup);
   div.querySelector('.meta').textContent = '· ' + (c.description || '');
   div.querySelector('.time').textContent = fmtTime(c.start_ms);
-  div.querySelector('.sub').textContent = mhz + unit + enc + (c.audio_deleted ? ' · audio deleted' : '');
+  fillSub(div.querySelector('.sub'), c, mhz);
+  if (c.emergency) div.classList.add('emergency');
   div.children[4].textContent = ((c.length_ms || 0) / 1000).toFixed(1) + ' s';
   setTx(div, c);
   const pb = div.querySelector('.play');
@@ -482,6 +520,7 @@ $('#tab-live').onclick = () => tab('live');
 $('#tab-archive').onclick = () => tab('archive');
 $('#tab-settings').onclick = () => tab('settings');
 
+loadUnits();
 pollLive(true);
 setInterval(() => pollLive(false), 2000);
 </script>

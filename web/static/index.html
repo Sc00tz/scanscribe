@@ -379,7 +379,7 @@ async function loadArchive(reset) {
   $('#more').hidden = calls.length < 50;
   if (reset && !calls.length) $('#arch-list').innerHTML = '<div class="empty">No calls match.</div>';
 }
-async function loadChannels() {
+async function loadArchiveChannels() {
   const chans = await api('/api/channels');
   const sel = $('#f-channel'), keep = sel.value;
   sel.length = 1;
@@ -552,7 +552,7 @@ function tab(name) {
   if (name === 'settings') loadSettings().catch(() => {});
   if (name === 'live') loadChannels();
   if (name === 'ref') loadRef();
-  if (name === 'archive') { loadChannels(); loadArchive(true); }
+  if (name === 'archive') { loadArchiveChannels().catch(() => {}); loadArchive(true); }
 }
 $('#tab-live').onclick = () => tab('live');
 $('#tab-archive').onclick = () => tab('archive');

@@ -72,6 +72,8 @@ fi
 if ! grep -q '^TONE_DETECTION=' "$CONF_DIR/scanscribe.env"; then
   sed -n '/^# --- Paging tones/,$p' "$APP_DIR/config/scanscribe.env" >> "$CONF_DIR/scanscribe.env"
 fi
+# The first release defaulted TONE_B_MIN to 1.5, which missed pages with a ~1 s B tone. Move an untouched 1.5 to 0.8.
+sed -i 's/^TONE_B_MIN=1\.5$/TONE_B_MIN=0.8/' "$CONF_DIR/scanscribe.env"
 install -m 0644 "$APP_DIR/systemd/scanscribe-recorder.service" /etc/systemd/system/scanscribe-recorder.service
 install -m 0644 "$APP_DIR/systemd/scanscribe-web.service" /etc/systemd/system/scanscribe-web.service
 install -m 0644 "$APP_DIR/systemd/scanscribe-transcribe.service" /etc/systemd/system/scanscribe-transcribe.service

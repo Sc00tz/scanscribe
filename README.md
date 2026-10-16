@@ -55,7 +55,7 @@ stores each tone pair with the call, and:
   **Play tone** on the Tones tab plays just the tone from a recent call.
 
 Only two-tone pages are detected (not long tones, warble, MDC or DTMF). The detector's own defaults expect a 2.6 s B tone,
-which missed a real Capital Area page with a B tone of about 2 s, so `TONE_B_MIN` defaults to 1.5 s. Tune `TONE_A_MIN`,
+which missed real pages with B tones of about 2 s and about 1 s, so `TONE_B_MIN` defaults to 0.8 s. Tune `TONE_A_MIN`,
 `TONE_B_MIN` or switch it off with `TONE_DETECTION=off` in `/etc/scanscribe/scanscribe.env`, then restart
 `scanscribe-transcribe`. Calls recorded before the feature existed are scanned in the background when the transcriber is idle.
 The original audio is never modified.

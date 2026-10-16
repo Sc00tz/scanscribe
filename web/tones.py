@@ -13,13 +13,14 @@ import tempfile
 TOL_HZ = 3.0
 
 # Shortest A and B tone to accept (seconds). The library's own defaults (0.85 / 2.6) missed a real
-# Capital Area page whose B tone is about 2 s long, so these are looser. Override in scanscribe.env.
+# Capital Area page whose B tone is about 2 s long, and the Fire Dispatch page 1530 / 1180 Hz has A and B tones of
+# only about 1 s each, so these are looser. Override in scanscribe.env.
 # Only a tone that starts within this many seconds of the call's start is skipped in playback and left
 # out of the transcript. Pages come first; a detection later in a call is left alone.
 SKIP_WINDOW_S = 15.0
 
 A_MIN = float(os.environ.get("TONE_A_MIN", "0.7"))
-B_MIN = float(os.environ.get("TONE_B_MIN", "1.5"))
+B_MIN = float(os.environ.get("TONE_B_MIN", "0.8"))
 
 
 def detect(path):

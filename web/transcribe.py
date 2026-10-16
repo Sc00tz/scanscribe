@@ -5,8 +5,10 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tones  # noqa: E402
 from app import CAPTURE_DIR, connect, init_db  # noqa: E402
 
+TONES_ENABLED = os.environ.get("TONE_DETECTION", "on").strip().lower() not in ("off", "0", "false", "no")
 MODEL = os.environ.get("WHISPER_MODEL", "small.en")
 THREADS = int(os.environ.get("WHISPER_THREADS", "2"))
 LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "en")
@@ -61,16 +63,65 @@ def split_turns(words, src_times):
     return [t for t in turns if t["text"]]
 
 
-def transcribe(model, path, src_times, prompt=None):
-    segments, _info = model.transcribe(
-        str(path), language=LANGUAGE, vad_filter=True, beam_size=5,
-        condition_on_previous_text=False, initial_prompt=prompt or None,
-        word_timestamps=bool(src_times))
-    segments = list(segments)
+def scan_tones(call_id, audio_path, length_ms):
+    """Look for paging tones in one call and store them. Never raises: a tone problem must not stop
+    transcription. Calls longer than the transcription limit (stuck-open channels) are marked scanned
+    without being read. Returns the events found."""
+    events, status = [], 1
+    if TONES_ENABLED and (length_ms or 0) <= MAX_CALL_SECONDS * 1000:
+        try:
+            events = tones.detect(CAPTURE_DIR / audio_path)
+        except Exception as exc:
+            status = 2
+            print(f"call {call_id}: tone scan failed: {exc}", flush=True)
+    with connect() as con:
+        con.execute("DELETE FROM tone_events WHERE call_id=?", (call_id,))
+        for e in events:
+            con.execute("INSERT INTO tone_events (call_id, freq_a, freq_b, a_len, b_len, start_s, end_s) VALUES (?,?,?,?,?,?,?)",
+                        (call_id, e["freq_a"], e["freq_b"], e["a_len"], e["b_len"], e["start"], e["end"]))
+        con.execute("UPDATE calls SET tones_checked=? WHERE id=?", (status, call_id))
+    if events:
+        pairs = ", ".join(f"{e['freq_a']:.0f}/{e['freq_b']:.0f} Hz" for e in events)
+        print(f"call {call_id}: paging tone {pairs}", flush=True)
+    return events
+
+
+def stored_tone_end(call_id):
+    """Seconds into the call where its last paging tone ends (0 if none). Only tones that start near the
+    beginning count, so a stray detection later in a call can never hide real speech."""
+    with connect() as con:
+        row = con.execute("SELECT MAX(end_s) FROM tone_events WHERE call_id=? AND start_s<=?",
+                          (call_id, tones.SKIP_WINDOW_S)).fetchone()
+    return float(row[0] or 0)
+
+
+def transcribe(model, path, src_times, prompt=None, skip_s=0.0):
+    """Transcribe a call, ignoring the first skip_s seconds (the paging tone, which whisper only
+    turns into junk text). Returns (text, turns)."""
+    source, tmp = str(path), None
+    if skip_s > 0:
+        tmp, remaining = tones.trim_after(path, skip_s)
+        if tmp is not None:
+            if remaining < 0.4:  # nothing but the tone
+                os.unlink(tmp)
+                return "", []
+            source = tmp
+        else:
+            skip_s = 0.0  # ffmpeg failed: transcribe the whole call as before
+    try:
+        segments, _info = model.transcribe(
+            source, language=LANGUAGE, vad_filter=True, beam_size=5,
+            condition_on_previous_text=False, initial_prompt=prompt or None,
+            word_timestamps=bool(src_times))
+        segments = list(segments)
+    finally:
+        if tmp is not None and os.path.exists(tmp):
+            os.unlink(tmp)
     text = " ".join(s.text.strip() for s in segments).strip()
     turns = []
     if src_times:
-        words = [(w.start, w.word) for s in segments for w in (s.words or [])]
+        # word times are relative to the trimmed audio; the radio start times are relative to the call
+        words = [(w.start + skip_s, w.word) for s in segments for w in (s.words or [])]
         turns = split_turns(words, src_times)
     return text, turns
 
@@ -82,22 +133,40 @@ def main():
     while True:
         with connect() as con:
             row = con.execute(
-                "SELECT id, audio_path, length_ms, src_times FROM calls WHERE transcribed_at IS NULL AND audio_deleted=0 AND attempts<? "
+                "SELECT id, audio_path, length_ms, src_times, tones_checked FROM calls "
+                "WHERE transcribed_at IS NULL AND audio_deleted=0 AND attempts<? "
                 "ORDER BY id DESC LIMIT 1", (MAX_ATTEMPTS,)).fetchone()
+            if row is None:  # idle: catch up on tone scans for calls recorded before this feature existed
+                old = con.execute(
+                    "SELECT id, audio_path, length_ms FROM calls WHERE tones_checked=0 AND audio_deleted=0 "
+                    "ORDER BY id DESC LIMIT 1").fetchone()
         if row is None:
-            time.sleep(2)
+            try:
+                if old is not None:
+                    scan_tones(old["id"], old["audio_path"], old["length_ms"])
+                else:
+                    time.sleep(2)
+            except Exception as exc:  # e.g. database busy: try again shortly
+                print(f"tone backfill: {exc}", flush=True)
+                time.sleep(5)
             continue
         started = time.time()
         try:
             turns = []
             if (row["length_ms"] or 0) > MAX_CALL_SECONDS * 1000:
                 text = "[call too long to transcribe]"
+                if row["tones_checked"] == 0:
+                    scan_tones(row["id"], row["audio_path"], row["length_ms"])
             else:
                 try:
                     times = json.loads(row["src_times"] or "[]")
                 except ValueError:
                     times = []
-                text, turns = transcribe(model, CAPTURE_DIR / row["audio_path"], times, prompt)
+                if row["tones_checked"] == 0:
+                    scan_tones(row["id"], row["audio_path"], row["length_ms"])
+                tone_end = stored_tone_end(row["id"])
+                text, turns = transcribe(model, CAPTURE_DIR / row["audio_path"], times, prompt,
+                                         skip_s=tone_end + 0.1 if tone_end > 0 else 0.0)
             with connect() as con:
                 con.execute("UPDATE calls SET transcript=?, turns=?, transcribed_at=? WHERE id=?",
                             (text, json.dumps(turns) if turns else None, int(time.time()), row["id"]))

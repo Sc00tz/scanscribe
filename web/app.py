@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -16,6 +17,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tones  # noqa: E402
 
 
 CAPTURE_DIR = Path(os.environ.get("CAPTURE_DIR", "/var/lib/scanscribe/recordings"))
@@ -43,6 +47,21 @@ CREATE TABLE IF NOT EXISTS calls (
   audio_deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS units (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS tone_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  call_id INTEGER NOT NULL,
+  freq_a REAL NOT NULL, freq_b REAL NOT NULL,
+  a_len REAL, b_len REAL,
+  start_s REAL, end_s REAL
+);
+CREATE INDEX IF NOT EXISTS tone_events_call ON tone_events(call_id);
+CREATE TABLE IF NOT EXISTS tone_library (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  freq_a REAL NOT NULL, freq_b REAL NOT NULL,
+  tol_hz REAL NOT NULL DEFAULT 3.0,
+  created_at INTEGER
+);
 CREATE INDEX IF NOT EXISTS calls_start ON calls(start_ms);
 CREATE INDEX IF NOT EXISTS calls_tg ON calls(talkgroup, start_ms);
 """
@@ -66,7 +85,8 @@ def init_db():
         if "attempts" not in cols:
             con.execute("ALTER TABLE calls ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
         for col, ddl in (("emergency", "INTEGER NOT NULL DEFAULT 0"), ("units", "TEXT"), ("err_pct", "INTEGER"),
-                          ("src_times", "TEXT"), ("turns", "TEXT")):
+                          ("src_times", "TEXT"), ("turns", "TEXT"),
+                          ("tones_checked", "INTEGER NOT NULL DEFAULT 0")):  # 0 = not scanned, 1 = scanned, 2 = scan failed
             if col not in cols:
                 con.execute(f"ALTER TABLE calls ADD COLUMN {col} {ddl}")
         con.execute("PRAGMA journal_mode=WAL")
@@ -213,7 +233,91 @@ def query_calls(q):
                 except ValueError:
                     row[k] = []
             out.append(row)
+        attach_tones(con, out)
         return out
+
+
+def attach_tones(con, rows):
+    """Add a 'tones' list to each call: its detected paging tones, labelled from the tone library.
+    Labels are worked out here, not stored, so naming a tone also labels every older call."""
+    for row in rows:
+        row["tones"] = []
+    if not rows:
+        return
+    by_id = {row["id"]: row for row in rows}
+    marks = ",".join("?" * len(by_id))
+    library = [dict(r) for r in con.execute("SELECT id, name, freq_a, freq_b, tol_hz FROM tone_library")]
+    for e in con.execute(f"SELECT call_id, freq_a, freq_b, a_len, b_len, start_s, end_s FROM tone_events "
+                         f"WHERE call_id IN ({marks}) ORDER BY start_s", list(by_id)):
+        hit = tones.match(e["freq_a"], e["freq_b"], library)
+        by_id[e["call_id"]]["tones"].append({
+            "a": e["freq_a"], "b": e["freq_b"], "a_len": e["a_len"], "b_len": e["b_len"],
+            "start": e["start_s"], "end": e["end_s"],
+            "label": hit["name"] if hit else None, "lib_id": hit["id"] if hit else None})
+
+
+def get_tones(min_count=2):
+    """The tone library with usage counts, plus tone pairs heard but not yet named (heard at least
+    min_count times, so a one-off bit of noise does not clutter the list)."""
+    with connect() as con:
+        library = [dict(r) for r in con.execute(
+            "SELECT id, name, freq_a, freq_b, tol_hz FROM tone_library ORDER BY name COLLATE NOCASE")]
+        events = con.execute(
+            """SELECT e.call_id, e.freq_a, e.freq_b, e.end_s, c.start_ms, c.audio_deleted, c.tag, c.freq
+               FROM tone_events e JOIN calls c ON c.id = e.call_id""").fetchall()
+    for entry in library:
+        entry.update(count=0, last_ms=None, sample=None)
+    unmatched = []
+    for e in events:
+        sample = None if e["audio_deleted"] else {
+            "id": e["call_id"], "tag": e["tag"], "freq": e["freq"], "start_ms": e["start_ms"], "end": e["end_s"]}
+        hit = tones.match(e["freq_a"], e["freq_b"], library)
+        if hit:
+            hit["count"] += 1
+            if e["start_ms"] is not None and (hit["last_ms"] is None or e["start_ms"] >= hit["last_ms"]):
+                hit["last_ms"] = e["start_ms"]
+            if sample and (hit["sample"] is None or e["start_ms"] >= hit["sample"]["start_ms"]):
+                hit["sample"] = sample
+        else:
+            unmatched.append({"freq_a": e["freq_a"], "freq_b": e["freq_b"], "start_ms": e["start_ms"], "sample": sample})
+    unnamed = [g for g in tones.cluster(unmatched) if g["count"] >= min_count]
+    unnamed.sort(key=lambda g: (g["last_ms"] or 0), reverse=True)
+    return {"library": library, "unnamed": unnamed}
+
+
+def name_tone(body):
+    """Name a tone pair, rename an existing entry, or (empty name with an id) remove one."""
+    if not isinstance(body, dict):
+        raise SettingsError("bad format")
+    name = clean_text(body.get("name"), "name", maxlen=40)
+    tid = body.get("id")
+    with connect() as con:
+        if tid is not None:
+            if isinstance(tid, bool) or not isinstance(tid, int):
+                raise SettingsError("bad tone id")
+            if not con.execute("SELECT 1 FROM tone_library WHERE id=?", (tid,)).fetchone():
+                raise SettingsError("That tone is not in the library")
+            if name:
+                con.execute("UPDATE tone_library SET name=? WHERE id=?", (name, tid))
+            else:
+                con.execute("DELETE FROM tone_library WHERE id=?", (tid,))
+        else:
+            if not name:
+                raise SettingsError("name is required")
+            try:
+                fa, fb = float(body.get("freq_a")), float(body.get("freq_b"))
+            except (TypeError, ValueError):
+                raise SettingsError("tone frequencies must be numbers")
+            if not (100 <= fa <= 3500 and 100 <= fb <= 3500):
+                raise SettingsError("tone frequencies must be between 100 and 3500 Hz")
+            library = [dict(r) for r in con.execute("SELECT id, name, freq_a, freq_b, tol_hz FROM tone_library")]
+            same = tones.match(fa, fb, library)
+            if same:  # already in the library: treat as a rename rather than creating a duplicate
+                con.execute("UPDATE tone_library SET name=? WHERE id=?", (name, same["id"]))
+            else:
+                con.execute("INSERT INTO tone_library (name, freq_a, freq_b, tol_hz, created_at) VALUES (?,?,?,?,?)",
+                            (name, round(fa, 1), round(fb, 1), tones.TOL_HZ, int(time.time())))
+        con.commit()
 
 
 def get_units():
@@ -317,6 +421,7 @@ def run_retention(now=None):
                 if _inside(jp):
                     _unlink(jp)
             entries_removed = con.execute("DELETE FROM calls WHERE start_ms<?", (cutoff_ms,)).rowcount
+            con.execute("DELETE FROM tone_events WHERE call_id NOT IN (SELECT id FROM calls)")
         con.commit()
     # tidy empty folders (deepest first)
     for d in sorted((x for x in CAPTURE_DIR.rglob("*") if x.is_dir()), key=lambda x: len(x.parts), reverse=True):
@@ -634,6 +739,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(live_channels())
             elif url.path == "/api/units":
                 self.send_json(get_units())
+            elif url.path == "/api/tones":
+                self.send_json(get_tones(min(max(int_arg(q, "min") or 2, 1), 100)))
             elif url.path == "/api/codes":
                 self.send_file(Path(__file__).parent / "codes.json", "application/json", range_ok=False)
             elif url.path == "/api/settings":
@@ -674,6 +781,9 @@ class Handler(BaseHTTPRequestHandler):
                 result = {"ok": True, "summary": summary}
             elif url.path == "/api/units":
                 set_unit(body.get("id"), body.get("name"))
+                result = {"ok": True}
+            elif url.path == "/api/tones/name":
+                name_tone(body)
                 result = {"ok": True}
             elif url.path == "/api/apply":
                 request_apply(body.get("what"))

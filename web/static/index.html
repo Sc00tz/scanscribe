@@ -419,11 +419,30 @@ async function pollLive(first) {
     $('#live-status').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (e) { $('#live-status').textContent = 'Connection problem, retrying…'; }
 }
+// Safari (and some other browsers) only let a page start audio by itself after that player has been started by a
+// click. Turning auto-play on is that click, so play a 0.1 s silent clip through the same player. Skipped when a call
+// is already playing so it never cuts one off.
+function silentWav() {
+  const n = 800, b = new Uint8Array(44 + n), v = new DataView(b.buffer);
+  const t = (o, x) => { for (let i = 0; i < x.length; i++) b[o + i] = x.charCodeAt(i); };
+  t(0, 'RIFF'); v.setUint32(4, 36 + n, true); t(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true);
+  v.setUint16(34, 8, true); t(36, 'data'); v.setUint32(40, n, true); b.fill(128, 44);  // 8-bit silence is 128
+  let s = ''; b.forEach(c => { s += String.fromCharCode(c); });
+  return 'data:audio/wav;base64,' + btoa(s);
+}
+function unlockAudio() {
+  if (!playerIdle()) return;
+  startAt = 0; stopAt = null;
+  player.src = silentWav();
+  player.play().catch(() => {});
+}
 $('#auto').onclick = () => {
   auto = !auto; queue = [];
   $('#auto').classList.toggle('on', auto);
   $('#auto').textContent = 'Auto-play new calls: ' + (auto ? 'on' : 'off');
   drawLcd();
+  if (auto) unlockAudio();
 };
 
 // ---- Archive

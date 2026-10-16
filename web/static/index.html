@@ -382,6 +382,9 @@ function play(c, opts) {
 player.addEventListener('loadedmetadata', () => { if (startAt > 0 && startAt < player.duration) player.currentTime = startAt; });
 player.addEventListener('timeupdate', () => { if (stopAt !== null && player.currentTime >= stopAt) { stopAt = null; player.pause(); } });
 player.addEventListener('ended', () => { const n = queue.shift(); if (n) play(n); });
+// Nothing is playing: no clip loaded yet, or the last one stopped, finished or failed to load. (A bare player.paused is
+// not enough: calling play() with no clip loaded sets paused=false, which used to leave auto-play queueing forever.)
+function playerIdle() { return !player.getAttribute('src') || player.paused || player.ended || !!player.error; }
 
 async function api(path) { const r = await fetch(path); if (!r.ok) throw new Error(r.status); return r.json(); }
 
@@ -406,7 +409,7 @@ async function pollLive(first) {
         if (c.id <= lastId) continue;
         const row = el(c, !first); list.prepend(row);
         const off = locked.has(c.freq); row.hidden = off;
-        if (!first && !off) { pingKey(c.freq); if (auto) { if (player.paused || player.ended) play(c); else queue.push(c); } }
+        if (!first && !off) { pingKey(c.freq); if (auto) { if (playerIdle()) play(c); else queue.push(c); } }
       }
       lastId = Math.max(lastId, ...calls.map(c => c.id));
       const kids = list.children; while (kids.length > 100) kids[kids.length - 1].remove();
@@ -421,7 +424,6 @@ $('#auto').onclick = () => {
   $('#auto').classList.toggle('on', auto);
   $('#auto').textContent = 'Auto-play new calls: ' + (auto ? 'on' : 'off');
   drawLcd();
-  if (auto) player.play().catch(() => {});  // user gesture unlocks audio
 };
 
 // ---- Archive

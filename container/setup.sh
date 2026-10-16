@@ -51,11 +51,13 @@ else
   log "Trunk Recorder already installed, skipping build"
 fi
 
-log "Installing transcription (faster-whisper) in a virtualenv"
+log "Installing transcription (faster-whisper) and paging-tone detection in a virtualenv"
 if [[ ! -x "$APP_DIR/venv/bin/python" ]]; then python3 -m venv "$APP_DIR/venv"; fi
 # av is pinned below 17: faster-whisper 1.2.1 fails to decode audio with newer av releases
 "$APP_DIR/venv/bin/pip" install --quiet --upgrade pip
 "$APP_DIR/venv/bin/pip" install --quiet "faster-whisper==1.2.1" "av>=14,<17"
+# Paging-tone detection (numpy, scipy, pydub; uses the ffmpeg installed above). Pinned to the tested version.
+"$APP_DIR/venv/bin/pip" install --quiet "icad_tone_detection==2.9.0"
 
 log "Installing config (existing files in $CONF_DIR are kept)"
 [[ -f "$CONF_DIR/channels.master.csv" ]] || install -m 0644 "$APP_DIR/config/channels.master.csv" "$CONF_DIR/channels.master.csv"
@@ -66,6 +68,9 @@ if ! grep -q '^WHISPER_MODEL=' "$CONF_DIR/scanscribe.env"; then
 fi
 if ! grep -q '^RETENTION_AUDIO_DAYS=' "$CONF_DIR/scanscribe.env"; then
   sed -n '/^# --- Retention/,$p' "$APP_DIR/config/scanscribe.env" >> "$CONF_DIR/scanscribe.env"
+fi
+if ! grep -q '^TONE_DETECTION=' "$CONF_DIR/scanscribe.env"; then
+  sed -n '/^# --- Paging tones/,$p' "$APP_DIR/config/scanscribe.env" >> "$CONF_DIR/scanscribe.env"
 fi
 install -m 0644 "$APP_DIR/systemd/scanscribe-recorder.service" /etc/systemd/system/scanscribe-recorder.service
 install -m 0644 "$APP_DIR/systemd/scanscribe-web.service" /etc/systemd/system/scanscribe-web.service

@@ -35,6 +35,12 @@
   .call.emergency { border-color: #d33; border-left-color: #d33; background: color-mix(in srgb, #d33 10%, var(--panel)); }
   .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-right: 6px; }
   .badge.emg { background: #d33; color: #fff; } .badge.enc { background: #8a6d00; color: #fff; }
+  button.badge.tone { font-family: inherit; line-height: 1.4; cursor: pointer; color: var(--text);
+                      border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 22%, var(--panel)); }
+  button.badge.tone.unk { border-style: dashed; color: var(--dim); background: none; }
+  button.badge.tone:hover, button.badge.tone:focus-visible { border-color: var(--text); }
+  #tones td.n, #tones th.n { text-align: right; white-space: nowrap; } #tones .chtable td { padding: 5px 8px 5px 0; }
+  #skip { padding: 4px 10px; white-space: nowrap; }
   .unit { background: none; border: 0; border-bottom: 1px dotted var(--dim); color: inherit; font: inherit;
           padding: 0; margin-right: 8px; cursor: pointer; }
   .unit:hover, .unit:focus-visible { color: var(--accent); border-bottom-color: var(--accent); }
@@ -111,7 +117,7 @@
 <body>
 <header>
   <h1>ScanScribe</h1>
-  <nav><button id="tab-live" class="on">Live</button><button id="tab-archive">Archive</button><button id="tab-ref">Reference</button><button id="tab-settings">Settings</button></nav>
+  <nav><button id="tab-live" class="on">Live</button><button id="tab-archive">Archive</button><button id="tab-tones">Tones</button><button id="tab-ref">Reference</button><button id="tab-settings">Settings</button></nav>
 </header>
 <main>
   <section id="live">
@@ -146,6 +152,26 @@
     </div>
     <div id="arch-list"></div>
     <div class="bar" style="justify-content:center"><button id="more" class="btn" hidden>Load more</button></div>
+  </section>
+  <section id="tones" hidden>
+    <p class="meta" id="tn-note">Paging tones are the two-tone pages that alert each service. Name a tone once and every call
+      with that tone, old and new, shows the name.</p>
+    <div class="panel">
+      <h2>Named tones</h2>
+      <div class="scroll"><table class="chtable"><thead><tr>
+        <th>Name</th><th>Tone A / B (Hz)</th><th class="n">Heard</th><th>Last heard</th><th></th>
+      </tr></thead><tbody id="tn-lib"></tbody></table></div>
+      <div class="empty" id="tn-lib-empty" hidden>No tones named yet.</div>
+    </div>
+    <div class="panel">
+      <h2>Heard but not named</h2>
+      <p>Tones heard at least twice, so one-off noise stays out of the list. Play the tone to hear it, then name it.
+        <label><input type="checkbox" id="tn-once"> Also show tones heard only once</label></p>
+      <div class="scroll"><table class="chtable"><thead><tr>
+        <th>Tone A / B (Hz)</th><th class="n">Heard</th><th>Last heard</th><th></th>
+      </tr></thead><tbody id="tn-new"></tbody></table></div>
+      <div class="empty" id="tn-new-empty" hidden>No unnamed tones.</div>
+    </div>
   </section>
   <section id="ref" hidden>
     <div class="bar"><input id="ref-q" type="search" placeholder="Search codes, towns, units" aria-label="Search the reference"></div>
@@ -216,7 +242,7 @@
     </div>
   </section>
 </main>
-<footer><span id="now">Nothing playing</span><audio id="player" controls preload="none"></audio></footer>
+<footer><span id="now">Nothing playing</span><button id="skip" class="btn" type="button" title="Start playback after the paging tone">Skip paging tones: on</button><audio id="player" controls preload="none"></audio></footer>
 <script>
 const $ = s => document.querySelector(s);
 const player = $('#player');
@@ -284,6 +310,16 @@ function fillSub(box, c, mhz) {
   const add = (cls, t) => { const b = document.createElement('span'); b.className = 'badge ' + cls; b.textContent = t; box.append(b); };
   if (c.emergency) add('emg', 'EMERGENCY');
   if (c.encrypted) add('enc', 'ENCRYPTED');
+  (c.tones || []).forEach(t => {
+    const hit = toneFor(t), label = hit ? hit.name : (toneLibLoaded ? null : t.label);
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'badge tone' + (label ? '' : ' unk');
+    b.textContent = label || ('Unknown tone ' + Math.round(t.a) + '/' + Math.round(t.b));
+    b.title = (label ? 'Paging tone' : 'Paging tone, not named yet') + ': ' + t.a.toFixed(1) + ' Hz then ' +
+              t.b.toFixed(1) + ' Hz. Click to ' + (label ? 'rename' : 'name it') + '.';
+    b.onclick = () => nameTone(t);
+    box.append(b);
+  });
   box.append(mhz);
   (c.units || []).forEach(u => {
     box.append(' · ');
@@ -297,12 +333,16 @@ function fillSub(box, c, mhz) {
   if (c.audio_deleted) extra.push('audio deleted');
   if (extra.length) box.append(' · ' + extra.join(' · '));
 }
+function mhzOf(c) { return c.freq ? (c.freq / 1e6).toFixed(4) + ' MHz' : ''; }
+const callById = {};
 function el(c, fresh) {
   const div = document.createElement('div');
   div.className = 'call ' + cls(c) + (fresh ? ' fresh' : '');
   div.dataset.id = c.id;
   div.dataset.freq = c.freq;
-  const mhz = c.freq ? (c.freq / 1e6).toFixed(4) + ' MHz' : '';
+  div.dataset.tones = JSON.stringify(c.tones || []);
+  callById[c.id] = c;
+  const mhz = mhzOf(c);
   div.innerHTML = '<button class="play" title="Play">▶</button>' +
     '<div><span class="tag"></span> <span class="meta"></span></div>' +
     '<div class="time"></div><div class="meta sub"></div><div class="meta" style="text-align:right"></div>' +
@@ -319,13 +359,28 @@ function el(c, fresh) {
   else pb.onclick = () => play(c);
   return div;
 }
-function play(c) {
+// Paging tones: normally playback starts after the tone; "toneOnly" plays just the tone (to hear it).
+let skipTones = true, startAt = 0, stopAt = null;
+try { skipTones = localStorage.getItem('ss-skiptones') !== '0'; } catch (e) {}
+function drawSkip() { const b = $('#skip'); b.textContent = 'Skip paging tones: ' + (skipTones ? 'on' : 'off'); b.classList.toggle('on', skipTones); }
+$('#skip').onclick = () => {
+  skipTones = !skipTones;
+  try { localStorage.setItem('ss-skiptones', skipTones ? '1' : '0'); } catch (e) {}
+  drawSkip();
+};
+drawSkip();
+function play(c, opts) {
   playingId = c.id; currentCall = c; holdOn(c);
   document.querySelectorAll('.call').forEach(n => n.classList.toggle('playing', +n.dataset.id === c.id));
   $('#now').textContent = (c.tag || 'TG ' + c.talkgroup) + ' ' + fmtTime(c.start_ms);
+  const toneEnd = (c.tones || []).reduce((m, t) => (t.start <= 15 ? Math.max(m, t.end || 0) : m), 0);  // same 15 s rule as the server
+  startAt = 0; stopAt = null;
+  if (toneEnd > 0) { if (opts && opts.toneOnly) stopAt = toneEnd + 0.4; else if (skipTones) startAt = toneEnd + 0.1; }
   player.src = '/audio/' + c.id;
   player.play().catch(() => {});
 }
+player.addEventListener('loadedmetadata', () => { if (startAt > 0 && startAt < player.duration) player.currentTime = startAt; });
+player.addEventListener('timeupdate', () => { if (stopAt !== null && player.currentTime >= stopAt) { stopAt = null; player.pause(); } });
 player.addEventListener('ended', () => { const n = queue.shift(); if (n) play(n); });
 
 async function api(path) { const r = await fetch(path); if (!r.ok) throw new Error(r.status); return r.json(); }
@@ -340,7 +395,14 @@ async function pollLive(first) {
       list.querySelector('.empty')?.remove();
       for (const c of calls.slice().reverse()) {
         const existing = list.querySelector('[data-id="' + c.id + '"]');
-        if (existing) { setTx(existing, c); continue; }
+        if (existing) {
+          setTx(existing, c);
+          const tj = JSON.stringify(c.tones || []);
+          if (existing.dataset.tones !== tj) {  // the tone scan finished after the row was first drawn
+            existing.dataset.tones = tj; callById[c.id] = c; fillSub(existing.querySelector('.sub'), c, mhzOf(c));
+          }
+          continue;
+        }
         if (c.id <= lastId) continue;
         const row = el(c, !first); list.prepend(row);
         const off = locked.has(c.freq); row.hidden = off;
@@ -546,9 +608,10 @@ loadChannels();
 
 // ---- Tabs
 function tab(name) {
-  for (const t of ['live', 'archive', 'ref', 'settings']) {
+  for (const t of ['live', 'archive', 'tones', 'ref', 'settings']) {
     $('#' + t).hidden = name !== t; $('#tab-' + t).classList.toggle('on', name === t);
   }
+  if (name === 'tones') loadTones();
   if (name === 'settings') loadSettings().catch(() => {});
   if (name === 'live') loadChannels();
   if (name === 'ref') loadRef();
@@ -556,8 +619,79 @@ function tab(name) {
 }
 $('#tab-live').onclick = () => tab('live');
 $('#tab-archive').onclick = () => tab('archive');
+$('#tab-tones').onclick = () => tab('tones');
 $('#tab-ref').onclick = () => tab('ref');
 $('#tab-settings').onclick = () => tab('settings');
+
+// ---- Paging tones
+let toneLib = [], toneLibLoaded = false;
+function toneFor(t) {  // same rule as the server: nearest named tone within its tolerance
+  let best = null, bd = Infinity;
+  for (const e of toneLib) {
+    const d = Math.max(Math.abs(t.a - e.freq_a), Math.abs(t.b - e.freq_b));
+    if (d <= (e.tol_hz || 3) && d < bd) { best = e; bd = d; }
+  }
+  return best;
+}
+function repaintTones() {
+  document.querySelectorAll('.call').forEach(div => {
+    const c = callById[div.dataset.id];
+    if (c && (c.tones || []).length) fillSub(div.querySelector('.sub'), c, mhzOf(c));
+  });
+}
+async function loadToneLib() {
+  try { toneLib = (await api('/api/tones')).library; toneLibLoaded = true; } catch (e) {}
+  repaintTones();
+}
+async function nameTone(t) {
+  const hit = toneFor(t);
+  const name = prompt('Name for the paging tone ' + t.a.toFixed(1) + ' / ' + t.b.toFixed(1) + ' Hz' +
+                      (hit ? ' (leave empty to remove the name)' : '') + ':', hit ? hit.name : '');
+  if (name === null || (!hit && !name.trim())) return;
+  await saveToneName(hit ? {id: hit.id, name} : {freq_a: t.a, freq_b: t.b, name});
+}
+async function saveToneName(body) {
+  try {
+    const r = await post('/api/tones/name', body);
+    if (!r.ok) { alert(r.error); return; }
+  } catch (e) { alert('Could not save the name.'); return; }
+  await loadToneLib();
+  if (!$('#tones').hidden) loadTones();
+}
+function playSample(s) {
+  play({id: s.id, tag: s.tag, freq: s.freq, start_ms: s.start_ms, tones: [{start: 0, end: s.end}]}, {toneOnly: true});
+}
+function toneRow(cells, sample, actions) {
+  const tr = document.createElement('tr');
+  cells.forEach(([text, num]) => { const td = tr.insertCell(); td.textContent = text; if (num) td.className = 'n'; });
+  const td = tr.insertCell();
+  if (sample) {
+    const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = '▶ Play tone';
+    b.onclick = () => playSample(sample); td.append(b, ' ');
+  }
+  actions.forEach(([label, fn]) => { const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = label; b.onclick = fn; td.append(b, ' '); });
+  return tr;
+}
+async function loadTones() {
+  let d;
+  try { d = await api('/api/tones?min=' + ($('#tn-once').checked ? 1 : 2)); }
+  catch (e) { $('#tn-note').textContent = 'The tone list could not be loaded.'; return; }
+  toneLib = d.library; toneLibLoaded = true; repaintTones();
+  const when = ms => ms ? fmtTime(ms) : '';
+  const lib = $('#tn-lib'); lib.textContent = '';
+  d.library.forEach(e => lib.append(toneRow(
+    [[e.name], [e.freq_a.toFixed(1) + ' / ' + e.freq_b.toFixed(1)], [String(e.count), true], [e.last_ms ? fmtTime(e.last_ms) : 'not heard yet']],
+    e.sample,
+    [['Rename', () => nameTone({a: e.freq_a, b: e.freq_b})],
+     ['Remove', () => { if (confirm('Remove the name "' + e.name + '"? Calls keep the tone and show it as unnamed.')) saveToneName({id: e.id, name: ''}); }]])));
+  $('#tn-lib-empty').hidden = d.library.length > 0;
+  const nw = $('#tn-new'); nw.textContent = '';
+  d.unnamed.forEach(g => nw.append(toneRow(
+    [[g.freq_a.toFixed(1) + ' / ' + g.freq_b.toFixed(1)], [String(g.count), true], [when(g.last_ms)]],
+    g.sample, [['Name it…', () => nameTone({a: g.freq_a, b: g.freq_b})]])));
+  $('#tn-new-empty').hidden = d.unnamed.length > 0;
+}
+$('#tn-once').onchange = loadTones;
 
 // ---- Reference
 let refData = null;
@@ -590,7 +724,7 @@ async function loadRef() {
 $('#ref-q').addEventListener('input', loadRef);
 
 
-Promise.all([loadUnits(), loadCodes()]).then(() => pollLive(true));
+Promise.all([loadUnits(), loadCodes(), loadToneLib()]).then(() => pollLive(true));
 setInterval(() => pollLive(false), 2000);
 </script>
 </body>
